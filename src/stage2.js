@@ -53,6 +53,7 @@ const JUMP_KEYS = ['ArrowUp', 'w', ' ']
 const SHIELD_COLOR = '#5cf2ff'
 const SHIELD_R = 30 // 盾の半径（ここまで来た矢を判定する）
 const TRICK_R = 80 // 黄色い矢が回り込むときの半径
+const TRICK_SPEEDUP = 4 // 回り込むあいだは4倍の速さで回る（次の矢より先に届くように）
 const TRICK_COLOR = '#ffe066'
 const ARROW_SPAWN = 280 // 矢が現れる中心からの距離
 const DIRS = {
@@ -540,11 +541,12 @@ function newArrow(g) {
 function moveArrow(e, dt) {
   let step = e.v * dt
   if (e.phase === 'orbit') {
+    // step は「まっすぐ進む距離」。回るときは TRICK_SPEEDUP 倍の距離を進む
     const left = (Math.PI - e.turned) * TRICK_R
-    const used = Math.min(step, left)
+    const used = Math.min(step * TRICK_SPEEDUP, left)
     e.turned += used / TRICK_R
     e.theta += (e.spin * used) / TRICK_R
-    step -= used
+    step -= used / TRICK_SPEEDUP
     if (e.turned >= Math.PI - 1e-9) e.phase = 'final'
   }
   if (e.phase !== 'orbit') {
@@ -577,7 +579,7 @@ function updateShieldTurn(g, dt) {
     // 盾に届くまでに進む道のり。黄色い矢は半周ぶん長い
     const rest = (bt.nextArrival - bt.stime) * a.v
     let trick = a.trick
-    let dist = trick ? rest - Math.PI * TRICK_R + SHIELD_R : rest + SHIELD_R
+    let dist = trick ? rest - (Math.PI * TRICK_R) / TRICK_SPEEDUP + SHIELD_R : rest + SHIELD_R
     if (trick && dist < TRICK_R + 20) {
       // 回り込む余裕がないときは、ふつうの矢にする
       trick = false
@@ -595,7 +597,8 @@ function updateShieldTurn(g, dt) {
       r: dist,
       v: a.v,
     })
-    bt.nextArrival += gap * (1 + Math.random() * 0.6)
+    // 黄色い矢のあとは、盾を反対に向け直す時間を少し多めにとる
+    bt.nextArrival += gap * (1 + Math.random() * 0.6) * (trick ? 1.3 : 1)
     bt.nextArrow = newArrow(g)
   }
 

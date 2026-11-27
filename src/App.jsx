@@ -672,11 +672,13 @@ export default function App() {
       }
       if (scr !== 'playing') {
         // 結果画面：ステージ1クリア後は Enter でステージ2へ、それ以外は Enter でもう一度
+        // ステージ1の後（クリアでもゲームオーバーでも）は 2 キーで拾ったものを持ってステージ2へ
         const stage1Clear = scr === 'clear' && resultRef.current.stage === 1
         if (e.key === 'Enter' || e.key === ' ') {
           if (stage1Clear) continueToStage2()
           else retry()
-        } else if (e.key === 'r' || e.key === 'R') retry()
+        } else if (e.key === '2' && resultRef.current.stage === 1) continueToStage2()
+        else if (e.key === 'r' || e.key === 'R') retry()
         else if (e.key === 'Escape') toTitle()
         return
       }
@@ -727,6 +729,7 @@ export default function App() {
   }
 
   const stage1Clear = screen === 'clear' && result?.stage === 1
+  const stage1Over = screen === 'over' && result?.stage === 1
   const stage2Lost = screen === 'over' && result?.stage === 2
 
   return (
@@ -813,7 +816,8 @@ export default function App() {
               </div>
             )}
 
-            {stage1Clear && (
+            {stage1Over && <p className="sub">拾ったアイテム・装備は ステージ2に持っていけるよ</p>}
+            {(stage1Clear || stage1Over) && (
               <div className="item-summary">
                 {Object.values(ITEMS).map((item) => (
                   <span key={item.key}>
@@ -822,7 +826,7 @@ export default function App() {
                 ))}
               </div>
             )}
-            {stage1Clear && (
+            {(stage1Clear || stage1Over) && (
               <div className="equip-summary">
                 {['weapon', 'armor'].map((slot) => {
                   const key = result.equips[slot]
@@ -840,6 +844,11 @@ export default function App() {
             <button className={stage1Clear ? 'secondary' : undefined} onClick={retry}>
               もう一度
             </button>
+            {stage1Over && (
+              <button className="secondary" onClick={continueToStage2}>
+                拾ったものを持ってステージ2へ
+              </button>
+            )}
             {stage2Lost && (
               <button className="secondary" onClick={() => start(diffRef.current, 1)}>
                 ステージ1でアイテムを集める
@@ -851,7 +860,9 @@ export default function App() {
             <p className="hint">
               {stage1Clear
                 ? 'Enter でステージ2へ ／ R でもう一度 ／ Esc でタイトルへ'
-                : 'Enter・R でもう一度 ／ Esc でタイトルへ'}
+                : stage1Over
+                  ? 'Enter・R でもう一度 ／ 2 でステージ2へ ／ Esc でタイトルへ'
+                  : 'Enter・R でもう一度 ／ Esc でタイトルへ'}
             </p>
           </div>
         )}
