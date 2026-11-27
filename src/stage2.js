@@ -553,6 +553,7 @@ function updateEnemyTurn(g, dt, keys) {
   bt.prevY = p.y
 
   const floor = box.y + box.h
+  const leftWall = wallDistance(p, box, bt.spikeDir) > 40 // トゲ（壁から36pxまで）より外に出たか
   for (const e of bt.bullets) {
     if (e.fall) {
       // 重力で落ちて、床に当たるとはね返る
@@ -564,6 +565,8 @@ function updateEnemyTurn(g, dt, keys) {
     }
     if (e.spike) {
       // トゲ：予告（warn）のあと、少しのあいだだけ出る
+      // 自機が壁から十分離れたら（ジャンプしたら）予告を切り上げてすぐ出す → 着地のころには引っこんでいる
+      if (e.warn > 0.08 && leftWall) e.warn = 0.08
       if (e.warn > 0) e.warn -= dt
       else e.life -= dt
     }
@@ -658,7 +661,7 @@ function updateShieldTurn(g, dt) {
   bt.ptimer -= dt
 
   // 矢は「盾に届く時刻」から逆算して出す → 届く間隔が一定以上あくので必ず防げる
-  const gap = lv(g, 0.6, 0.45, 0.34) * (isRage(bt) ? 0.8 : 1)
+  const gap = lv(g, 0.42, 0.32, 0.25) * (isRage(bt) ? 0.85 : 1)
   while (bt.nextArrival < end) {
     const a = bt.nextArrow
     // 盾に届くまでに進む道のり。黄色い矢は半周ぶん長い
@@ -683,7 +686,7 @@ function updateShieldTurn(g, dt) {
       v: a.v,
     })
     // 黄色い矢のあとは、盾を反対に向け直す時間を少し多めにとる
-    bt.nextArrival += gap * (1 + Math.random() * 0.6) * (trick ? 1.3 : 1)
+    bt.nextArrival += gap * (1 + Math.random() * 0.4) * (trick ? 1.3 : 1)
     bt.nextArrow = newArrow(g)
   }
 
@@ -765,7 +768,7 @@ function moveWithGravity(g, bt, p, box, keys, dt) {
   const onGround = pos >= floor - 0.5 && !bt.slamming
   if (onGround && bt.jumpBuffer > 0) {
     bt.vy = -JUMP_V
-    bt.shortHop = held // キーを押し続けていれば、離したとき小ジャンプにできる
+    bt.shortHop = held && bt.pattern !== 'slam' // キーを押し続けていれば、離したとき小ジャンプにできる（打ちつけ中は常に大ジャンプ）
     bt.jumpBuffer = 0
     bt.onPlat = null
   }
@@ -851,14 +854,23 @@ function setupPlatforms(g) {
   }
 }
 
+// 自機と、重力の向きの壁とのきょり
+function wallDistance(p, box, dir) {
+  if (dir === 'up') return p.y - box.y
+  if (dir === 'left') return p.x - box.x
+  if (dir === 'right') return box.x + box.w - p.x
+  return box.y + box.h - p.y
+}
+
 // 壁に打ちつけられた：その壁ぞいにトゲを出す（予告のあとに出る）
 function slamImpact(g) {
   const bt = g.battle
   const box = DODGE_BOX
   const d = GDIRS[bt.gdir]
-  // 予告のあいだにジャンプすれば、着地する前にトゲが引っこむ長さにしてある
-  const warn = lv(g, 0.4, 0.34, 0.28)
+  // warn：ジャンプするまでの猶予。壁から離れた時点でトゲはすぐ出て、着地する前に引っこむ
+  const warn = lv(g, 0.95, 0.84, 0.65)
   const life = lv(g, 0.25, 0.3, 0.3)
+  bt.spikeDir = bt.gdir
   const along = d.x ? box.h : box.w
   for (let depth = 6; depth <= 30; depth += 12) {
     for (let s = 6; s < along; s += 12) {
