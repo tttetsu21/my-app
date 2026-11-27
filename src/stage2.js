@@ -17,6 +17,8 @@ import {
   drawParticles,
   drawShip,
   drawItemIcon,
+  EQUIPS,
+  drawEquipHud,
 } from './shared.js'
 
 const BOSS_NAME = 'Kanadoo'
@@ -50,6 +52,8 @@ const JUMP_KEYS = ['ArrowUp', 'w', ' ']
 // 盾モード：矢が上下左右から飛んでくるので、盾をその方向に向けて防ぐ
 const SHIELD_COLOR = '#5cf2ff'
 const SHIELD_R = 30 // 盾の半径（ここまで来た矢を判定する）
+const TRICK_R = 80 // 黄色い矢が回り込むときの半径
+const TRICK_COLOR = '#ffe066'
 const ARROW_SPAWN = 280 // 矢が現れる中心からの距離
 const DIRS = {
   up: { x: 0, y: -1, angle: -Math.PI / 2 },
@@ -78,11 +82,15 @@ const CANCEL_KEYS = ['x', 'X', 'Escape', 'Backspace']
 // ===== バトル開始 =====
 // ステージ1から続けて挑むときも、スコアと時間はステージ2だけで数える（アイテムは持ち越す）
 export function startBattle(g) {
-  const hp = g.diff.soulHp
+  // 防具で最大HP、武器で攻撃力が上がる
+  const armor = g.equips.armor && EQUIPS[g.equips.armor]
+  const weapon = g.equips.weapon && EQUIPS[g.equips.weapon]
+  const hp = g.diff.soulHp + (armor ? armor.hp : 0)
   g.stage = 2
   g.score = 0
   g.time = 0
-  g.startItems = { ...g.items } // 「もう一度」のときに同じアイテムで始めるため
+  g.startItems = { ...g.items } // 「もう一度」のときに同じアイテム・装備で始めるため
+  g.startEquips = { ...g.equips }
   g.bullets = []
   g.shots = []
   g.drops = []
@@ -96,6 +104,7 @@ export function startBattle(g) {
     itemSel: 0,
     hp,
     maxHp: hp,
+    atk: weapon ? weapon.atk : 0,
     boss: { hp: g.diff.boss2Hp, maxHp: g.diff.boss2Hp, t: 0, shake: 0, fade: 1 },
     box: { ...MENU_BOX },
     bullets: [],
@@ -246,7 +255,7 @@ function strike(g) {
   const bt = g.battle
   const dist = Math.abs(bt.gauge - 0.5) * 2 // 0 = ど真ん中, 1 = 端
   const critical = dist < 0.06
-  const max = lv(g, 22, 20, 18)
+  const max = lv(g, 22, 20, 18) + bt.atk
   const dmg = Math.max(1, Math.round(max * (critical ? 1.25 : 1 - dist * 0.85)))
   const boss = bt.boss
   boss.hp = Math.max(0, boss.hp - dmg)
@@ -282,6 +291,7 @@ function startEnemyTurn(g) {
     bt.nextArrival = 1.6 // 最初の矢が盾に届く時刻（ターン開始からの秒数）
     bt.nextArrow = newArrow(g)
     popup(g, W / 2, SHIELD_BOX.y - 30, '盾！ 矢の方向に向けろ', SHIELD_COLOR)
+    if (!g.easy) popup(g, W / 2, SHIELD_BOX.y - 8, '黄色い矢は 反対側から来る！', TRICK_COLOR)
   }
 }
 
@@ -354,10 +364,11 @@ function spawnPatterns(g, dt) {
     } else if (name === 'pillars') {
       // 弾の柱が床をすべってくる：低い柱はジャンプでとびこえる
       // ノーマル以上では天井から伸びる柱も来る（こちらはジャンプすると当たる）
-      if (cd('pillars' + slow, lv(g, 1.15, 0.85, 0.65) * slow)) {
+      // 見てから反応できるよう、ふつうの攻撃（降ってくる壁）と同じくらいの速さ
+      if (cd('pillars' + slow, lv(g, 1.5, 1.2, 1.0) * slow)) {
         const side = Math.random() < 0.5 ? -1 : 1
         const x = side < 0 ? box.x - 10 : box.x + box.w + 10
-        const vx = -side * lv(g, 140, 170, 200)
+        const vx = -side * lv(g, 90, 105, 120)
         const ceiling = Math.random() < lv(g, 0, 0.3, 0.4)
         if (ceiling) {
           // 床から 45px だけ空けて、上から全部ふさぐ
@@ -369,11 +380,11 @@ function spawnPatterns(g, dt) {
       }
     } else if (name === 'bounce') {
       // 手が床ではねながら横切る：下をくぐるか、とびこえる
-      if (cd('bounce' + slow, lv(g, 1.3, 0.95, 0.75) * slow)) {
+      if (cd('bounce' + slow, lv(g, 1.6, 1.25, 1.0) * slow)) {
         const side = Math.random() < 0.5 ? -1 : 1
         const x = side < 0 ? box.x - 20 : box.x + box.w + 20
         const hop = lv(g, 300, 340, 380) * (0.85 + Math.random() * 0.3)
-        shoot(x, floor - 40 - Math.random() * 60, -side * lv(g, 110, 140, 170), 0, 12, '#fff6e0', {
+        shoot(x, floor - 40 - Math.random() * 60, -side * lv(g, 80, 95, 110), 0, 12, '#fff6e0', {
           hand: side,
           rot: 0,
           spin: side * 8,
@@ -512,15 +523,42 @@ function updateEnemyTurn(g, dt, keys) {
 }
 
 // ===== 盾モード =====
-// 次に飛ばす矢を決める。ハードは速い矢（黄色）がまざる
+const OPPOSITE = { up: 'down', down: 'up', left: 'right', right: 'left' }
+
+// 次に飛ばす矢を決める。ノーマル以上は黄色い矢（反対側に回り込む）がまざる
 function newArrow(g) {
   const dirs = Object.keys(DIRS)
-  const fast = Math.random() < lv(g, 0, 0.2, 0.35)
   return {
     from: dirs[Math.floor(Math.random() * dirs.length)],
-    v: lv(g, 170, 210, 250) * g.diff.speed * (fast ? 1.5 : 1),
-    fast,
+    v: lv(g, 170, 210, 250) * g.diff.speed,
+    trick: Math.random() < lv(g, 0, 0.25, 0.35),
   }
+}
+
+// 矢は「中心からの距離 r」と「角度 theta」で動かす
+// 黄色い矢：まっすぐ近づく → 半径 TRICK_R で半周回る → 反対側から盾に向かってくる
+function moveArrow(e, dt) {
+  let step = e.v * dt
+  if (e.phase === 'orbit') {
+    const left = (Math.PI - e.turned) * TRICK_R
+    const used = Math.min(step, left)
+    e.turned += used / TRICK_R
+    e.theta += (e.spin * used) / TRICK_R
+    step -= used
+    if (e.turned >= Math.PI - 1e-9) e.phase = 'final'
+  }
+  if (e.phase !== 'orbit') {
+    e.r -= step
+    if (e.trick && e.phase === 'in' && e.r <= TRICK_R) {
+      // 回り込み開始（行きすぎた分は回る距離にまわす）
+      const over = TRICK_R - e.r
+      e.r = TRICK_R
+      e.phase = 'orbit'
+      e.turned = 0
+      moveArrow(e, over / e.v)
+    }
+  }
+  e.heading = e.phase === 'orbit' ? e.theta + (e.spin * Math.PI) / 2 : e.theta + Math.PI
 }
 
 function updateShieldTurn(g, dt) {
@@ -536,20 +574,38 @@ function updateShieldTurn(g, dt) {
   const gap = lv(g, 0.6, 0.45, 0.34) * (isRage(bt) ? 0.8 : 1)
   while (bt.nextArrival < end) {
     const a = bt.nextArrow
-    const dist = (bt.nextArrival - bt.stime) * a.v + SHIELD_R
+    // 盾に届くまでに進む道のり。黄色い矢は半周ぶん長い
+    const rest = (bt.nextArrival - bt.stime) * a.v
+    let trick = a.trick
+    let dist = trick ? rest - Math.PI * TRICK_R + SHIELD_R : rest + SHIELD_R
+    if (trick && dist < TRICK_R + 20) {
+      // 回り込む余裕がないときは、ふつうの矢にする
+      trick = false
+      dist = rest + SHIELD_R
+    }
     if (dist > ARROW_SPAWN) break
-    const d = DIRS[a.from]
-    bt.bullets.push({ arrow: true, from: a.from, fast: a.fast, x: cx + d.x * dist, y: cy + d.y * dist, vx: -d.x * a.v, vy: -d.y * a.v })
+    bt.bullets.push({
+      arrow: true,
+      from: a.from,
+      block: trick ? OPPOSITE[a.from] : a.from, // 盾を向けるべき方向
+      trick,
+      spin: Math.random() < 0.5 ? -1 : 1,
+      phase: 'in',
+      theta: DIRS[a.from].angle,
+      r: dist,
+      v: a.v,
+    })
     bt.nextArrival += gap * (1 + Math.random() * 0.6)
     bt.nextArrow = newArrow(g)
   }
 
   for (const e of bt.bullets) {
-    e.x += e.vx * dt
-    e.y += e.vy * dt
-    if (Math.hypot(e.x - cx, e.y - cy) > SHIELD_R) continue
+    moveArrow(e, dt)
+    e.x = cx + Math.cos(e.theta) * e.r
+    e.y = cy + Math.sin(e.theta) * e.r
+    if (e.phase === 'orbit' || e.r > SHIELD_R) continue
     e.dead = true
-    if (e.from === bt.shieldDir) {
+    if (e.block === bt.shieldDir) {
       // 防いだ
       burst(g, e.x, e.y, SHIELD_COLOR, 10)
       addScore(g, 50)
@@ -576,8 +632,8 @@ function updateShieldTurn(g, dt) {
 function drawArrow(ctx, e) {
   ctx.save()
   ctx.translate(e.x, e.y)
-  ctx.rotate(Math.atan2(e.vy, e.vx))
-  ctx.fillStyle = e.fast ? '#ffe066' : '#ff6b6b'
+  ctx.rotate(e.heading)
+  ctx.fillStyle = e.trick ? TRICK_COLOR : '#ff6b6b'
   ctx.fillRect(-22, -2, 16, 4)
   ctx.beginPath()
   ctx.moveTo(4, 0)
@@ -699,6 +755,7 @@ export function drawBattle(ctx, g, screen) {
   ctx.textAlign = 'right'
   ctx.fillStyle = lv(g, '#9dffc4', '#c9c9e6', '#ff8a8a')
   ctx.fillText(`${g.diff.label}  STAGE 2`, W - 20, 30)
+  drawEquipHud(ctx, g, 20, 52)
 
   // 枠
   const box = bt.box
@@ -777,7 +834,7 @@ export function drawBattle(ctx, g, screen) {
     attack: 'まん中で Enter・Z・タップ！',
     enemy:
       bt.mode === 'shield'
-        ? '盾モード！ 矢印キー・WASD・タップで 盾の向きを変えて防げ'
+        ? '矢印キー・WASD・タップで 盾を向けろ（黄色は反対側に回り込む）'
         : bt.gravity
           ? '重力状態！ ←→で移動 ／ ↑・W・Space・タップで ジャンプ'
           : '矢印キー / ドラッグで よけろ！（Shiftで低速）',

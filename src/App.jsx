@@ -20,6 +20,14 @@ import {
   drawParticles,
   drawShip,
   drawItemIcon,
+  EQUIPS,
+  RARITIES,
+  NO_EQUIPS,
+  rollEquip,
+  equipStars,
+  equipEffect,
+  drawEquipIcon,
+  drawEquipHud,
 } from './shared.js'
 import { startBattle, updateBattle, drawBattle, battleKey, battlePointer } from './stage2.js'
 
@@ -57,7 +65,8 @@ function createGame(diff = DIFFICULTIES.normal) {
     diff,
     stage: 1,
     items: { onigiri: 0, cake: 0 }, // 持っているアイテムの数（ステージ2で使う）
-    drops: [], // 画面上に落ちているアイテム
+    equips: { ...NO_EQUIPS }, // 装備中の武器・防具（ステージ2で効果がある）
+    drops: [], // 画面上に落ちているアイテム・装備
     popups: [],
     easy: diff.key === 'easy',
     hard: diff.key === 'hard',
@@ -210,7 +219,29 @@ function aimedWay(g, n, spread, speed, r, color) {
 function dropItem(g, x, y) {
   const key = Math.random() < ITEMS.cake.chance ? 'cake' : 'onigiri'
   // 少し跳ね上がってから、ゆらゆら落ちてくる
-  g.drops.push({ key, x, y, vy: -120, t: 0 })
+  g.drops.push({ kind: 'item', key, x, y, vy: -120, t: 0 })
+}
+
+// 装備はレア度の重みで抽選（コモン60%・レア28%・エピック10%・レジェンド2%）
+function dropEquip(g, x, y) {
+  g.drops.push({ kind: 'equip', key: rollEquip(), x, y, vy: -120, t: 0 })
+}
+
+// 装備を拾う：今の装備よりレア度が高ければ持ちかえる。そうでなければスコアに
+function pickEquip(g, d) {
+  const e = EQUIPS[d.key]
+  const stars = equipStars(d.key)
+  const color = RARITIES[e.rarity].color
+  const cur = g.equips[e.slot]
+  if (!cur || equipStars(cur) < stars) {
+    g.equips[e.slot] = d.key
+    popup(g, d.x, d.y - 16, `${'★'.repeat(stars)} ${e.name} GET!`, color)
+    burst(g, d.x, d.y, color, 10 + stars * 10)
+  } else {
+    addScore(g, 300 * stars)
+    popup(g, d.x, d.y - 16, `${e.name} +${Math.round(300 * stars * g.diff.score)}`, color)
+    burst(g, d.x, d.y, color, 10)
+  }
 }
 
 function updateDrops(g, dt) {
@@ -223,6 +254,10 @@ function updateDrops(g, dt) {
     // 自機に触れたら拾う（弾の当たり判定より広め）
     if (Math.hypot(d.x - p.x, d.y - p.y) < 24) {
       d.dead = true
+      if (d.kind === 'equip') {
+        pickEquip(g, d)
+        continue
+      }
       const item = ITEMS[d.key]
       if (g.items[d.key] < ITEM_MAX) {
         g.items[d.key] += 1
@@ -274,8 +309,11 @@ function update(g, dt, keys) {
       b.hp -= 1
       b.flash = 0.05
       addScore(g, 10)
-      // 一定の確率でアイテムを落とす（画面上には同時に2個まで）
-      if (g.drops.length < 2 && Math.random() < g.diff.dropRate) dropItem(g, b.x, b.y + 30)
+      // 一定の確率でアイテムや装備を落とす（画面上には同時に2個まで）
+      if (g.drops.length < 2) {
+        if (Math.random() < g.diff.dropRate) dropItem(g, b.x, b.y + 30)
+        else if (Math.random() < g.diff.equipRate) dropEquip(g, b.x, b.y + 30)
+      }
     }
   }
   g.shots = g.shots.filter((s) => !s.dead && s.y > -20)
@@ -409,14 +447,27 @@ function draw(ctx, g, screen) {
   ctx.fillStyle = '#9ef0ff'
   for (const s of g.shots) ctx.fillRect(s.x - 1.5, s.y - 8, 3, 12)
 
-  // 落ちているアイテム（光る輪で目立たせる）
+  // 落ちているアイテム・装備（光る輪で目立たせる。装備はレア度の色、レアなほど輪が大きい）
   for (const d of g.drops) {
-    ctx.strokeStyle = `rgba(255,243,160,${0.5 + Math.sin(d.t * 8) * 0.3})`
+    ctx.globalAlpha = 0.5 + Math.sin(d.t * 8) * 0.3
     ctx.lineWidth = 2
-    ctx.beginPath()
-    ctx.arc(d.x, d.y, 15, 0, Math.PI * 2)
-    ctx.stroke()
-    drawItemIcon(ctx, d.key, d.x, d.y, 18)
+    if (d.kind === 'equip') {
+      const stars = equipStars(d.key)
+      ctx.strokeStyle = RARITIES[EQUIPS[d.key].rarity].color
+      for (let i = 0; i < Math.min(stars, 2); i++) {
+        ctx.beginPath()
+        ctx.arc(d.x, d.y, 15 + i * 5 + (stars >= 3 ? Math.sin(d.t * 6) * 3 : 0), 0, Math.PI * 2)
+        ctx.stroke()
+      }
+    } else {
+      ctx.strokeStyle = '#fff3a0'
+      ctx.beginPath()
+      ctx.arc(d.x, d.y, 15, 0, Math.PI * 2)
+      ctx.stroke()
+    }
+    ctx.globalAlpha = 1
+    if (d.kind === 'equip') drawEquipIcon(ctx, d.key, d.x, d.y, 20)
+    else drawItemIcon(ctx, d.key, d.x, d.y, 18)
   }
 
   // 自機
@@ -464,6 +515,7 @@ function draw(ctx, g, screen) {
     ctx.fillStyle = lv(g, '#9dffc4', '#c9c9e6', '#ff8a8a')
     ctx.fillText(`${g.diff.label}  PHASE ${b.phase + 1}/${PHASES.length}`, W / 2, 42)
     drawItemCounts(ctx, g, 20, H - 20)
+    drawEquipHud(ctx, g, 140, H - 20)
 
     // フェーズ名の表示（切り替わった直後だけ）
     if (screen === 'playing' && g.banner > 0) {
@@ -527,12 +579,13 @@ export default function App() {
     setStageState(n)
   }
 
-  // ゲーム開始。items はステージ2に持っていくアイテム
-  const start = (d = diffRef.current, st = stageRef.current, items = NO_ITEMS) => {
+  // ゲーム開始。items・equips はステージ2に持っていくアイテムと装備
+  const start = (d = diffRef.current, st = stageRef.current, items = NO_ITEMS, equips = NO_EQUIPS) => {
     setDiff(d)
     setStage(st)
     const g = createGame(d)
     g.items = { ...items }
+    g.equips = { ...equips }
     if (st === 2) startBattle(g)
     gameRef.current = g
     keysRef.current.clear()
@@ -543,11 +596,12 @@ export default function App() {
   // 同じステージをもう一度（ステージ2は同じアイテムを持って再挑戦）
   const retry = () => {
     const res = resultRef.current
-    start(diffRef.current, res.stage, res.stage === 2 ? res.startItems : NO_ITEMS)
+    if (res.stage === 2) start(diffRef.current, 2, res.startItems, res.startEquips)
+    else start(diffRef.current, 1)
   }
 
-  // ステージ1で集めたアイテムを持ってステージ2へ
-  const continueToStage2 = () => start(diffRef.current, 2, resultRef.current.items)
+  // ステージ1で集めたアイテムと装備を持ってステージ2へ
+  const continueToStage2 = () => start(diffRef.current, 2, resultRef.current.items, resultRef.current.equips)
 
   const toTitle = () => {
     screenRef.current = 'title'
@@ -579,6 +633,8 @@ export default function App() {
             newBest,
             items: { ...g.items },
             startItems: { ...(g.startItems ?? NO_ITEMS) },
+            equips: { ...g.equips },
+            startEquips: { ...(g.startEquips ?? NO_EQUIPS) },
           }
           resultRef.current = res
           screenRef.current = end
@@ -706,14 +762,15 @@ export default function App() {
                 <li>移動：矢印キー / WASD（スマホはドラッグ）</li>
                 <li>低速移動：Shift ／ ショットは自動で連射</li>
                 <li>中心の白い点だけが当たり判定</li>
-                <li>ボスが落とすアイテムは、ステージ2に持っていける</li>
+                <li>ボスが落とすアイテム・装備は、ステージ2に持っていける</li>
+                <li>装備はレア度が高いほど強い（★1〜★4）</li>
               </ul>
             ) : (
               <ul className="help">
                 <li>たたかう：ゲージのまん中で止めて攻撃</li>
                 <li>アイテム：食べてHPを回復</li>
                 <li>相手のターン：枠の中で弾をよける</li>
-                <li>ここから始めるとアイテムなし</li>
+                <li>ここから始めるとアイテム・装備なし</li>
               </ul>
             )}
             <div className="difficulty">
@@ -751,7 +808,7 @@ export default function App() {
                 <strong>💡 ヒント</strong>
                 <p>ステージ1でアイテムを獲得しよう！</p>
                 <p className="tip-sub">
-                  ボスに弾を当てるとアイテムを落とすことがある。ステージ1をクリアすると、拾ったアイテムを持ってステージ2に挑めるよ。
+                  ボスに弾を当てるとアイテムや装備を落とすことがある。剣はこうげき、よろいは最大HPが上がり、レア度が高いほど強い。ステージ1をクリアすると、拾ったものを持ってステージ2に挑めるよ。
                 </p>
               </div>
             )}
@@ -765,7 +822,21 @@ export default function App() {
                 ))}
               </div>
             )}
-            {stage1Clear && <button onClick={continueToStage2}>このアイテムでステージ2へ</button>}
+            {stage1Clear && (
+              <div className="equip-summary">
+                {['weapon', 'armor'].map((slot) => {
+                  const key = result.equips[slot]
+                  if (!key) return <span key={slot}>{slot === 'weapon' ? '武器なし' : '防具なし'}</span>
+                  const e = EQUIPS[key]
+                  return (
+                    <span key={slot} style={{ color: RARITIES[e.rarity].color }}>
+                      {'★'.repeat(equipStars(key))} {e.name}（{equipEffect(key)}）
+                    </span>
+                  )
+                })}
+              </div>
+            )}
+            {stage1Clear && <button onClick={continueToStage2}>この装備でステージ2へ</button>}
             <button className={stage1Clear ? 'secondary' : undefined} onClick={retry}>
               もう一度
             </button>

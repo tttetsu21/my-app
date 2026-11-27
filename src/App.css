@@ -245,3 +245,14 @@
   font-weight: 400;
   color: #dcdcf5;
 }
+
+/* ===== ステージ1クリア画面：装備 ===== */
+.overlay .equip-summary {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  margin-bottom: 4px;
+  font-size: 14px;
+  font-weight: 700;
+  color: #6a6a8a;
+}

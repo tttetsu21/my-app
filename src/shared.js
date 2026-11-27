@@ -23,7 +23,7 @@ export function ready(img) {
 
 // ===== 難易度設定 =====
 // hp: ボスの体力 / lives: 残機 / speed: 敵弾の速さ倍率 / score: スコア倍率
-// dropRate: ステージ1でボスに弾を当てたときアイテムが出る確率
+// dropRate: ステージ1でボスに弾を当てたときアイテムが出る確率 / equipRate: 装備が出る確率
 // soulHp: ステージ2の自分のHP / boss2Hp: ステージ2のボスのHP
 export const DIFFICULTIES = {
   easy: {
@@ -34,6 +34,7 @@ export const DIFFICULTIES = {
     speed: 0.85,
     score: 0.5,
     dropRate: 0.006,
+    equipRate: 0.004,
     soulHp: 40,
     boss2Hp: 240,
     color: '#7dffb0',
@@ -47,6 +48,7 @@ export const DIFFICULTIES = {
     speed: 1,
     score: 1,
     dropRate: 0.004,
+    equipRate: 0.003,
     soulHp: 30,
     boss2Hp: 300,
     color: '#7fd8ff',
@@ -60,6 +62,7 @@ export const DIFFICULTIES = {
     speed: 1.15,
     score: 1.5,
     dropRate: 0.003,
+    equipRate: 0.0025,
     soulHp: 24,
     boss2Hp: 390,
     color: '#ff6b6b',
@@ -79,6 +82,50 @@ export const ITEMS = {
   cake: { key: 'cake', name: 'ケーキ', heal: Infinity, chance: 0.2, desc: 'HPを全回復' },
 }
 export const ITEM_MAX = 9 // 1種類あたりの最大所持数
+
+// ===== 装備 =====
+// レア度：weight が出やすさ（合計100）。レアなほど強い
+export const RARITIES = {
+  common: { label: 'コモン', stars: 1, weight: 60, color: '#e0e0e0' },
+  rare: { label: 'レア', stars: 2, weight: 28, color: '#5cb8ff' },
+  epic: { label: 'エピック', stars: 3, weight: 10, color: '#c58bff' },
+  legend: { label: 'レジェンド', stars: 4, weight: 2, color: '#ffd84d' },
+}
+
+// slot: weapon（武器：ステージ2の攻撃力アップ）/ armor（防具：ステージ2の最大HPアップ）
+export const EQUIPS = {
+  stick: { key: 'stick', name: '木の棒', slot: 'weapon', rarity: 'common', atk: 3 },
+  ironSword: { key: 'ironSword', name: '鉄の剣', slot: 'weapon', rarity: 'rare', atk: 6 },
+  flameSword: { key: 'flameSword', name: '炎の剣', slot: 'weapon', rarity: 'epic', atk: 10 },
+  starSword: { key: 'starSword', name: '星の剣', slot: 'weapon', rarity: 'legend', atk: 16 },
+  cloth: { key: 'cloth', name: '布の服', slot: 'armor', rarity: 'common', hp: 5 },
+  leather: { key: 'leather', name: '革のよろい', slot: 'armor', rarity: 'rare', hp: 10 },
+  steel: { key: 'steel', name: '鋼のよろい', slot: 'armor', rarity: 'epic', hp: 18 },
+  starCape: { key: 'starCape', name: '星のマント', slot: 'armor', rarity: 'legend', hp: 30 },
+}
+export const NO_EQUIPS = { weapon: null, armor: null }
+
+// レア度の重みで抽選し、武器か防具を半々で選ぶ
+export function rollEquip() {
+  let n = Math.random() * 100
+  let rarity = 'common'
+  for (const [key, r] of Object.entries(RARITIES)) {
+    rarity = key
+    n -= r.weight
+    if (n < 0) break
+  }
+  const slot = Math.random() < 0.5 ? 'weapon' : 'armor'
+  return Object.values(EQUIPS).find((e) => e.slot === slot && e.rarity === rarity).key
+}
+
+export function equipStars(key) {
+  return RARITIES[EQUIPS[key].rarity].stars
+}
+
+export function equipEffect(key) {
+  const e = EQUIPS[key]
+  return e.slot === 'weapon' ? `こうげき+${e.atk}` : `最大HP+${e.hp}`
+}
 
 // スコア加算（難易度の倍率をかける）
 export function addScore(g, points) {
@@ -201,4 +248,55 @@ export function drawItemIcon(ctx, key, x, y, size) {
     ctx.fill()
   }
   ctx.restore()
+}
+
+// 装備のアイコン（剣かよろい。色はレア度）
+export function drawEquipIcon(ctx, key, x, y, size) {
+  const e = EQUIPS[key]
+  const color = RARITIES[e.rarity].color
+  const s = size / 2
+  ctx.save()
+  ctx.translate(x, y)
+  if (e.slot === 'weapon') {
+    ctx.rotate(-Math.PI / 4)
+    ctx.fillStyle = color
+    ctx.fillRect(-s * 0.15, -s, s * 0.3, s * 1.35) // 刃
+    ctx.fillStyle = '#8a6a3a'
+    ctx.fillRect(-s * 0.5, s * 0.35, s, s * 0.18) // つば
+    ctx.fillRect(-s * 0.12, s * 0.5, s * 0.24, s * 0.5) // 柄
+  } else {
+    ctx.fillStyle = color
+    ctx.beginPath()
+    ctx.moveTo(-s * 0.9, -s * 0.7)
+    ctx.lineTo(-s * 0.35, -s)
+    ctx.lineTo(s * 0.35, -s)
+    ctx.lineTo(s * 0.9, -s * 0.7)
+    ctx.lineTo(s * 0.65, s)
+    ctx.lineTo(-s * 0.65, s)
+    ctx.closePath()
+    ctx.fill()
+    ctx.fillStyle = 'rgba(0,0,0,0.25)'
+    ctx.fillRect(-s * 0.1, -s * 0.8, s * 0.2, s * 1.6)
+  }
+  ctx.restore()
+}
+
+// 今の装備を「アイコン＋名前」で横に並べて描く
+export function drawEquipHud(ctx, g, x, y) {
+  ctx.font = '13px system-ui, sans-serif'
+  ctx.textAlign = 'left'
+  for (const slot of ['weapon', 'armor']) {
+    const key = g.equips[slot]
+    if (key) {
+      drawEquipIcon(ctx, key, x + 7, y - 5, 14)
+      ctx.fillStyle = RARITIES[EQUIPS[key].rarity].color
+      ctx.fillText(EQUIPS[key].name, x + 17, y)
+      x += 22 + ctx.measureText(EQUIPS[key].name).width
+    } else {
+      ctx.fillStyle = '#6a6a8a'
+      const label = slot === 'weapon' ? '武器なし' : '防具なし'
+      ctx.fillText(label, x, y)
+      x += 12 + ctx.measureText(label).width
+    }
+  }
 }
