@@ -573,7 +573,7 @@ function SkinPreview({ skin, locked }) {
     const paint = () => {
       ctx.clearRect(0, 0, 56, 56)
       drawShip(ctx, { x: 28, y: 28, r: 1, invuln: 0 }, { scale: 1.3, skin: shown })
-      if (!locked && (skin.rainbow || skin.shape === 'star' || skin.shape === 'phoenix')) raf = requestAnimationFrame(paint)
+      if (!locked && (skin.rainbow || skin.shape === 'star' || skin.shape === 'phoenix' || skin.shape === 'clap')) raf = requestAnimationFrame(paint)
     }
     paint()
     return () => cancelAnimationFrame(raf)

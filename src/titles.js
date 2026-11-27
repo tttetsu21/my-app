@@ -93,6 +93,14 @@ export const TITLES = [
     check: (g, end) => g.stage === 2 && end === 'clear' && !g.easy && g.battle.itemsUsed === 0,
   },
   {
+    key: 'clapMaster',
+    name: '見切りの達人',
+    tier: 3,
+    skin: 'clap',
+    cond: 'ステージ2で必殺技「拍手喝采」をノーダメージで見切る',
+    check: (g) => g.stage === 2 && g.battle.specialPerfect,
+  },
+  {
     key: 'legendGear',
     name: '伝説の発見者',
     tier: 3,

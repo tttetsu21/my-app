@@ -637,6 +637,7 @@ function updateEnemyTurn(g, dt, keys) {
       // 必殺技はターンの順番に数えない
       bt.specialCount += 1
       const perfect = bt.hp === bt.turnStartHp
+      if (perfect) bt.specialPerfect = true // 称号「見切りの達人」用
       goMenu(bt)
       bt.text = perfect
         ? `「拍手喝采」を 完全に 見切った！\nボーナス +${Math.round(3000 * g.diff.score)}`

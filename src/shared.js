@@ -214,6 +214,8 @@ export const SKINS = {
   aurora: { key: 'aurora', name: 'オーロラ', tier: 3, shape: 'wing', color: '#5cffc8', color2: '#5cb8ff', glow: true, trail: true },
   crimson: { key: 'crimson', name: 'クリムゾン', tier: 3, shape: 'delta', color: '#ff3355', color2: '#ffb3c7', glow: true, trail: true },
   starlight: { key: 'starlight', name: 'スターライト', tier: 3, shape: 'star', color: '#ffe9a8', color2: '#ffffff', glow: true, trail: true },
+  // 必殺技「拍手喝采」を見切った証：両側の手が拍手する
+  clap: { key: 'clap', name: 'ハンドクラップ', tier: 3, shape: 'clap', color: '#ff8fb8', color2: '#fff6e0', glow: true, trail: true },
   // ★4：虹色・金色に輝く伝説のスキン
   rainbow: { key: 'rainbow', name: 'レインボー', tier: 4, shape: 'star', color: '#ffffff', glow: true, trail: true, rainbow: true },
   phoenix: { key: 'phoenix', name: 'フェニックス', tier: 4, shape: 'phoenix', color: '#ffd84d', color2: '#ff6b3d', glow: true, trail: true },
@@ -252,6 +254,17 @@ function shapePath(ctx, shape, c1, c2, t) {
     ctx.beginPath()
     ctx.arc(0, 0, 4, 0, Math.PI * 2)
     ctx.fill()
+  } else if (shape === 'clap') {
+    // 本体の両側で、手のひらがパチパチと拍手する
+    poly([[0, -14], [-9, 10], [0, 5], [9, 10]], c1)
+    const open = 13 + Math.abs(Math.sin(t * 7)) * 5
+    for (const side of [-1, 1]) {
+      ctx.fillStyle = c2
+      ctx.beginPath()
+      ctx.ellipse(side * open, 0, 4, 6, side * 0.3, 0, Math.PI * 2)
+      ctx.fill()
+      ctx.fillRect(side * open - 1.5 + side * 1.5, 4, 3, 5) // 手首
+    }
   } else if (shape === 'phoenix') {
     // 羽ばたく大きな翼
     const flap = Math.sin(t * 8) * 3
