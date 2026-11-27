@@ -42,7 +42,7 @@ const TURN_MODES = ['normal', 'gravity', 'shield']
 
 // 相手のターンの攻撃パターン（同じモードの中で順番に使う）
 const PATTERNS = ['rain', 'colors', 'hands', 'walls', 'aim']
-const GRAVITY_PATTERNS = ['pillars', 'slam', 'bounce']
+const GRAVITY_PATTERNS = ['platforms', 'slam', 'bounce']
 
 // 色つき攻撃：青は止まっていれば当たらない、オレンジは動いていれば当たらない
 const BLUE = '#3da5ff'
@@ -317,12 +317,16 @@ function startEnemyTurn(g) {
   if (bt.pattern === 'slam') popup(g, W / 2, DODGE_BOX.y - 10, '重力が暴れる！ 打ちつけられたら反対へ跳べ', GRAVITY_COLOR)
   else if (bt.gravity) popup(g, W / 2, DODGE_BOX.y - 10, '重力！ ↑でジャンプ', GRAVITY_COLOR)
   if (bt.pattern === 'colors') popup(g, W / 2, DODGE_BOX.y - 10, '青は止まれ！ オレンジは動け！', ORANGE)
+  if (bt.pattern === 'platforms') popup(g, W / 2, DODGE_BOX.y - 30, '床に落ちたら大ダメージ！ 台を乗り継げ', GRAVITY_COLOR)
+  bt.plats = []
+  bt.onPlat = null
   bt.ptimer = turnLength(g, bt) + 0.4 // 最初の0.4秒は枠の変形を待つ
   const p = g.player
   p.x = DODGE_BOX.x + DODGE_BOX.w / 2
   p.y = DODGE_BOX.y + DODGE_BOX.h * 0.7
   bt.prevX = p.x
   bt.prevY = p.y
+  if (bt.pattern === 'platforms') setupPlatforms(g)
   if (bt.mode === 'shield') {
     p.x = SHIELD_BOX.x + SHIELD_BOX.w / 2
     p.y = SHIELD_BOX.y + SHIELD_BOX.h / 2
@@ -384,11 +388,11 @@ function spawnPatterns(g, dt) {
       }
     } else if (name === 'colors') {
       // 縦いっぱいの柱が横切る。青は止まっていれば、オレンジは動いていれば当たらない
-      if (cd('colors' + slow, lv(g, 1.3, 1.0, 0.8) * slow)) {
+      if (cd('colors' + slow, lv(g, 1.1, 0.85, 0.7) * slow)) {
         const side = bt.colorSide
         const x = side < 0 ? box.x - 8 : box.x + box.w + 8
         const blue = Math.random() < 0.5
-        const vx = -side * lv(g, 110, 130, 150)
+        const vx = -side * lv(g, 160, 190, 220)
         for (let y = box.y + 6; y < box.y + box.h; y += 12) {
           shoot(x, y, vx, 0, 6, blue ? BLUE : ORANGE, { cmode: blue ? 'blue' : 'orange' })
         }
@@ -423,23 +427,11 @@ function spawnPatterns(g, dt) {
           shoot(x, box.y - 8, 0, lv(g, 100, 120, 140), 6, '#ff7ad9')
         }
       }
-    } else if (name === 'pillars') {
-      // 弾の柱が床をすべってくる：低い柱はジャンプでとびこえる
-      // ノーマル以上では天井から伸びる柱も来る（こちらはジャンプすると当たる）
-      // 見てから反応できるよう、ふつうの攻撃（降ってくる壁）と同じくらいの速さ
-      if (cd('pillars' + slow, lv(g, 1.5, 1.2, 1.0) * slow)) {
-        const side = Math.random() < 0.5 ? -1 : 1
-        const x = side < 0 ? box.x - 10 : box.x + box.w + 10
-        const vx = -side * lv(g, 90, 105, 120)
-        const ceiling = Math.random() < lv(g, 0, 0.3, 0.4)
-        if (ceiling) {
-          // 床から 45px だけ空けて、上から全部ふさぐ
-          for (let y = box.y + 6; y < floor - 45; y += 12) shoot(x, y, vx, 0, 6, '#5cf2ff')
-        } else {
-          const n = 2 + Math.floor(Math.random() * lv(g, 3, 4, 5)) // 高さ 2〜6 個
-          for (let i = 0; i < n; i++) shoot(x, floor - 6 - i * 12, vx, 0, 6, GRAVITY_COLOR)
-        }
-      }
+    } else if (name === 'platforms') {
+      // 台の乗り継ぎ：いちばん後ろの台が十分進んだら、次の台を出す
+      const spawnX = bt.platDir > 0 ? box.x - 50 : box.x + box.w + 50
+      const last = bt.plats[bt.plats.length - 1]
+      if (!last || Math.abs(last.x - spawnX) >= platSpacing(g)) addPlatform(g, spawnX)
     } else if (name === 'bounce') {
       // 手が床ではねながら横切る：下をくぐるか、とびこえる
       if (cd('bounce' + slow, lv(g, 1.6, 1.25, 1.0) * slow)) {
@@ -517,6 +509,11 @@ function updateEnemyTurn(g, dt, keys) {
   const p = g.player
   const box = DODGE_BOX
 
+  // 台を動かす。乗っているときは自機もいっしょに運ばれる
+  for (const pl of bt.plats) pl.x += pl.vx * dt
+  bt.plats = bt.plats.filter((pl) => Math.abs(pl.x - (box.x + box.w / 2)) < box.w / 2 + 80)
+  if (bt.onPlat) p.x += bt.onPlat.vx * dt
+
   // 自機の移動（枠の中だけ）
   const speed = keys.has('Shift') ? 80 : 160
   let dx = 0
@@ -543,6 +540,8 @@ function updateEnemyTurn(g, dt, keys) {
     p.y = Math.max(box.y + 8, Math.min(box.y + box.h - 8, p.y + dy * speed * dt))
   }
   p.x = Math.max(box.x + 8, Math.min(box.x + box.w - 8, p.x + dx * speed * dt))
+  // 台の端から出たら（壁に押されたときも）落ちる
+  if (bt.onPlat && (!bt.plats.includes(bt.onPlat) || Math.abs(p.x - bt.onPlat.x) > bt.onPlat.w / 2 + 3)) bt.onPlat = null
 
   bt.ptimer -= dt
   if (bt.ptimer < turnLength(g, bt)) spawnPatterns(g, dt)
@@ -585,7 +584,7 @@ function updateEnemyTurn(g, dt, keys) {
       if (e.cmode === 'blue' && !moving) continue // 青：止まっていればセーフ
       if (e.cmode === 'orange' && moving) continue // オレンジ：動いていればセーフ
       if (Math.hypot(e.x - p.x, e.y - p.y) < e.r + p.r) {
-        const dmg = lv(g, 3, 4, 5)
+        const dmg = e.heavy ? lv(g, 6, 8, 10) : lv(g, 3, 4, 5)
         bt.hp = Math.max(0, bt.hp - dmg)
         p.invuln = 1
         burst(g, p.x, p.y, '#ffffff', 16)
@@ -759,7 +758,8 @@ function moveWithGravity(g, bt, p, box, keys, dt) {
   const d = GDIRS[bt.gdir]
   const held = d.away.some((k) => keys.has(k)) || keys.has(' ')
   const lo = d.x ? (d.x > 0 ? box.x + 8 : -(box.x + box.w - 8)) : d.y > 0 ? box.y + 8 : -(box.y + box.h - 8)
-  const floor = d.x ? (d.x > 0 ? box.x + box.w - 8 : -(box.x + 8)) : d.y > 0 ? box.y + box.h - 8 : -(box.y + 8)
+  let floor = d.x ? (d.x > 0 ? box.x + box.w - 8 : -(box.x + 8)) : d.y > 0 ? box.y + box.h - 8 : -(box.y + 8)
+  if (bt.onPlat) floor = bt.onPlat.y - 8 // 台の上に立っているときは台が床
   let pos = d.x ? p.x * d.x : p.y * d.y
   if ((held && !bt.jumpHeld) || bt.tapJump) bt.jumpBuffer = 0.15
   const onGround = pos >= floor - 0.5 && !bt.slamming
@@ -767,6 +767,7 @@ function moveWithGravity(g, bt, p, box, keys, dt) {
     bt.vy = -JUMP_V
     bt.shortHop = held // キーを押し続けていれば、離したとき小ジャンプにできる
     bt.jumpBuffer = 0
+    bt.onPlat = null
   }
   bt.jumpBuffer = Math.max(0, bt.jumpBuffer - dt)
   bt.tapJump = false
@@ -775,8 +776,22 @@ function moveWithGravity(g, bt, p, box, keys, dt) {
     bt.shortHop = false
   }
   bt.jumpHeld = held
-  if (!bt.slamming) bt.vy += GRAVITY * dt
+  if (!bt.slamming && !bt.onPlat) bt.vy += GRAVITY * dt
+  const prev = pos
   pos += bt.vy * dt
+  // 落ちてきて台の上面を通りすぎたら、台に着地（下向きの重力のときだけ）
+  if (d.y > 0 && bt.vy >= 0 && !bt.onPlat) {
+    for (const pl of bt.plats) {
+      const top = pl.y - 8
+      if (prev <= top + 0.5 && pos >= top && Math.abs(p.x - pl.x) <= pl.w / 2 + 3) {
+        pos = top
+        bt.vy = 0
+        bt.onPlat = pl
+        floor = top
+        break
+      }
+    }
+  }
   if (pos >= floor) {
     pos = floor
     bt.vy = 0
@@ -791,6 +806,49 @@ function moveWithGravity(g, bt, p, box, keys, dt) {
   }
   if (d.x) p.x = pos * d.x
   else p.y = pos * d.y
+}
+
+// ===== 台の乗り継ぎ =====
+// 床一面がトゲ（落ちると大ダメージ）。左右に流れていく台を乗り継いでいく
+// 台の速さは前の「すべる柱」と同じ。難しいほど台がせまく、間があく
+function platSpacing(g) {
+  return lv(g, 100, 118, 132)
+}
+
+function addPlatform(g, x) {
+  const bt = g.battle
+  const floor = DODGE_BOX.y + DODGE_BOX.h
+  bt.platHigh = !bt.platHigh // 高い台と低い台を交互に
+  const h = bt.platHigh ? lv(g, 78, 84, 90) : lv(g, 40, 44, 48)
+  bt.plats.push({
+    x,
+    y: floor - h + (Math.random() - 0.5) * 12,
+    w: lv(g, 80, 64, 54),
+    vx: bt.platDir * lv(g, 90, 105, 120) * g.diff.speed,
+  })
+}
+
+function setupPlatforms(g) {
+  const bt = g.battle
+  const box = DODGE_BOX
+  const p = g.player
+  bt.platDir = Math.random() < 0.5 ? -1 : 1
+  bt.platHigh = true
+  // 自機は真ん中の台の上からスタート。そこから上流（台が来る側）に向かって台を並べておく
+  const cx = box.x + box.w / 2
+  addPlatform(g, cx)
+  const start = bt.plats[0]
+  start.w = lv(g, 100, 90, 80)
+  for (let x = cx - bt.platDir * platSpacing(g); Math.abs(x - cx) < box.w / 2 + 50; x -= bt.platDir * platSpacing(g)) {
+    addPlatform(g, x)
+  }
+  p.x = cx
+  p.y = start.y - 8
+  bt.onPlat = start
+  // 床一面のトゲ（いつでも当たる・大ダメージ）
+  for (let x = box.x + 6; x < box.x + box.w; x += 12) {
+    bt.bullets.push({ x, y: box.y + box.h - 6, vx: 0, vy: 0, r: 6, color: '#ff5c5c', heavy: true })
+  }
 }
 
 // 壁に打ちつけられた：その壁ぞいにトゲを出す（予告のあとに出る）
@@ -911,6 +969,12 @@ export function drawBattle(ctx, g, screen) {
     ctx.beginPath()
     ctx.rect(box.x + 2, box.y + 2, box.w - 4, box.h - 4)
     ctx.clip()
+    for (const pl of bt.plats ?? []) {
+      ctx.fillStyle = '#ffffff'
+      ctx.fillRect(pl.x - pl.w / 2, pl.y, pl.w, 6)
+      ctx.fillStyle = GRAVITY_COLOR
+      ctx.fillRect(pl.x - pl.w / 2, pl.y, pl.w, 2)
+    }
     for (const e of bt.bullets) drawBullet(ctx, e)
     ctx.restore()
     if (bt.gravity) {
@@ -966,7 +1030,9 @@ export function drawBattle(ctx, g, screen) {
         : bt.gravity
           ? bt.pattern === 'slam'
             ? '打ちつけられた壁の 反対向きの矢印キー（Space・タップ）で ジャンプ！'
-            : '重力状態！ ←→で移動 ／ ↑・W・Space・タップで ジャンプ'
+            : bt.pattern === 'platforms'
+              ? '台から台へ ジャンプで乗り継げ！ 床に落ちると大ダメージ'
+              : '重力状態！ ←→で移動 ／ ↑・W・Space・タップで ジャンプ'
           : bt.pattern === 'colors'
             ? '青い柱は 止まって、オレンジの柱は 動いて よけろ！'
           : '矢印キー / ドラッグで よけろ！（Shiftで低速）',
