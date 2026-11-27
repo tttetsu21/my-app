@@ -4,8 +4,15 @@ import './App.css'
 // ===== ゲームの基本設定 =====
 const W = 480
 const H = 640
-const BOSS_HP = 600
+const BOSS_HP = 900
 const BEST_KEY = 'barrage-best-score'
+const PHASES = ['スパイラル', 'リング＆狙い撃ち', 'カーブ旋風', '花火', '二重スパイラル']
+
+// 残りHPから今のフェーズ番号（0〜4）を求める
+function phaseOf(boss) {
+  const ratio = Math.max(0, boss.hp) / BOSS_HP
+  return Math.min(PHASES.length - 1, Math.floor((1 - ratio) * PHASES.length))
+}
 
 // ベストスコアの読み書き（使えない環境でも落ちないように try/catch）
 function loadBest() {
@@ -30,7 +37,8 @@ function createGame() {
     shots: [],
     bullets: [],
     particles: [],
-    boss: { x: W / 2, y: 120, r: 28, hp: BOSS_HP, t: 0, fire: 0, fire2: 0, angle: 0, flash: 0 },
+    boss: { x: W / 2, y: 120, r: 28, hp: BOSS_HP, t: 0, fire: 0, fire2: 0, angle: 0, flash: 0, phase: 0 },
+    banner: 2,
     score: 0,
     lives: 3,
     time: 0,
@@ -43,8 +51,9 @@ function createGame() {
   }
 }
 
-function fire(g, x, y, angle, speed, r, color) {
-  g.bullets.push({ x, y, vx: Math.cos(angle) * speed, vy: Math.sin(angle) * speed, r, color })
+// extra には curve（曲がる速さ）や fuse（爆発までの秒数）を指定できる
+function fire(g, x, y, angle, speed, r, color, extra) {
+  g.bullets.push({ x, y, vx: Math.cos(angle) * speed, vy: Math.sin(angle) * speed, r, color, ...extra })
 }
 
 function burst(g, x, y, color, count) {
@@ -77,11 +86,10 @@ function updateAmbient(g, dt) {
 // ===== ボスの弾幕パターン =====
 function bossAttack(g, dt) {
   const b = g.boss
-  const ratio = b.hp / BOSS_HP
   b.fire -= dt
   b.fire2 -= dt
 
-  if (ratio > 2 / 3) {
+  if (b.phase === 0) {
     // フェーズ1：回転する4方向スパイラル
     if (b.fire <= 0) {
       b.fire = 0.06
@@ -90,7 +98,7 @@ function bossAttack(g, dt) {
         fire(g, b.x, b.y, b.angle + (k * Math.PI) / 2, 150, 5, '#ff6b9d')
       }
     }
-  } else if (ratio > 1 / 3) {
+  } else if (b.phase === 1) {
     // フェーズ2：全方位リング ＋ 自機狙い5WAY
     if (b.fire <= 0) {
       b.fire = 0.7
@@ -106,8 +114,38 @@ function bossAttack(g, dt) {
         fire(g, b.x, b.y, aim + k * 0.18, 230, 5, '#ffd56b')
       }
     }
+  } else if (b.phase === 2) {
+    // フェーズ3（新）：カーブ旋風 … 右回り・左回りに曲がる弾が交差する
+    if (b.fire <= 0) {
+      b.fire = 0.45
+      b.angle += 0.3
+      for (let k = 0; k < 16; k++) {
+        const cw = k % 2 === 0
+        fire(g, b.x, b.y, b.angle + (k * Math.PI * 2) / 16, 135, 5, cw ? '#5cf2ff' : '#ff7ad9', {
+          curve: cw ? 1.1 : -1.1,
+        })
+      }
+    }
+    if (b.fire2 <= 0) {
+      b.fire2 = 1.6
+      const aim = Math.atan2(g.player.y - b.y, g.player.x - b.x)
+      for (let k = -1; k <= 1; k++) {
+        fire(g, b.x, b.y, aim + k * 0.25, 200, 6, '#ffffff')
+      }
+    }
+  } else if (b.phase === 3) {
+    // フェーズ4（新）：花火 … 大玉が飛んでいき、少しすると破裂して輪になる
+    if (b.fire <= 0) {
+      b.fire = 1.0
+      for (let k = 0; k < 3; k++) {
+        const tx = 40 + Math.random() * (W - 80)
+        const ty = 260 + Math.random() * 260
+        const a = Math.atan2(ty - b.y, tx - b.x)
+        fire(g, b.x, b.y, a, 170, 11, '#ffe066', { fuse: 0.8 + Math.random() * 0.5 })
+      }
+    }
   } else {
-    // フェーズ3：逆回転の二重スパイラル ＋ リング
+    // フェーズ5：逆回転の二重スパイラル ＋ リング
     if (b.fire <= 0) {
       b.fire = 0.05
       b.angle += 0.21
@@ -172,14 +210,55 @@ function update(g, dt, keys) {
   b.flash = Math.max(0, b.flash - dt)
   b.x = W / 2 + Math.sin(b.t * 0.7) * 120
   b.y = 120 + Math.sin(b.t * 1.3) * 20
+
+  // フェーズが変わったら弾を消して、少し間を空ける
+  g.banner = Math.max(0, g.banner - dt)
+  const phase = phaseOf(b)
+  if (phase !== b.phase && b.hp > 0) {
+    b.phase = phase
+    for (const e of g.bullets) {
+      g.score += 10
+      if (Math.random() < 0.3) burst(g, e.x, e.y, e.color, 2)
+    }
+    g.bullets = []
+    b.fire = 1
+    b.fire2 = 1.3
+    b.angle = 0
+    g.banner = 2
+  }
   bossAttack(g, dt)
 
   // 敵弾の移動
+  const spawned = []
   for (const e of g.bullets) {
+    if (e.curve) {
+      // 速度ベクトルを回転させて弾を曲げる（曲がり方はだんだん弱まる）
+      const c = Math.cos(e.curve * dt)
+      const s = Math.sin(e.curve * dt)
+      const vx = e.vx * c - e.vy * s
+      e.vy = e.vx * s + e.vy * c
+      e.vx = vx
+      e.curve *= Math.exp(-0.6 * dt)
+    }
     e.x += e.vx * dt
     e.y += e.vy * dt
+    if (e.fuse !== undefined) {
+      e.fuse -= dt
+      if (e.fuse <= 0) {
+        // 花火の破裂
+        e.dead = true
+        burst(g, e.x, e.y, '#ffe066', 12)
+        const offset = Math.random() * Math.PI
+        for (let k = 0; k < 14; k++) {
+          const a = offset + (k * Math.PI * 2) / 14
+          spawned.push({ x: e.x, y: e.y, vx: Math.cos(a) * 115, vy: Math.sin(a) * 115, r: 4, color: '#ff9a3c' })
+        }
+      }
+    }
   }
-  g.bullets = g.bullets.filter((e) => e.x > -20 && e.x < W + 20 && e.y > -20 && e.y < H + 20)
+  g.bullets = g.bullets
+    .filter((e) => !e.dead && e.x > -20 && e.x < W + 20 && e.y > -20 && e.y < H + 20)
+    .concat(spawned)
 
   // 被弾判定
   if (p.invuln === 0) {
@@ -199,7 +278,7 @@ function update(g, dt, keys) {
   if (b.hp <= 0) {
     burst(g, b.x, b.y, '#ffd56b', 120)
     g.bullets = []
-    g.score += g.lives * 5000 + Math.max(0, Math.floor(120 - g.time)) * 100
+    g.score += g.lives * 5000 + Math.max(0, Math.floor(180 - g.time)) * 100
     return 'clear'
   }
   return null
@@ -283,6 +362,18 @@ function draw(ctx, g, screen) {
     ctx.fillText(`SCORE ${g.score}`, 20, 42)
     ctx.textAlign = 'right'
     ctx.fillText(`${'♥'.repeat(Math.max(0, g.lives))}  ${g.time.toFixed(1)}s`, W - 20, 42)
+    ctx.textAlign = 'center'
+    ctx.fillStyle = '#c9c9e6'
+    ctx.fillText(`PHASE ${b.phase + 1}/${PHASES.length}`, W / 2, 42)
+
+    // フェーズ名の表示（切り替わった直後だけ）
+    if (screen === 'playing' && g.banner > 0) {
+      ctx.globalAlpha = Math.min(1, g.banner)
+      ctx.fillStyle = '#ff8fb8'
+      ctx.font = 'bold 26px system-ui, sans-serif'
+      ctx.fillText(PHASES[b.phase], W / 2, H / 2)
+      ctx.globalAlpha = 1
+    }
   }
 }
 
