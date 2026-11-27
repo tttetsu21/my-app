@@ -109,7 +109,8 @@ function bossAttack(g, dt) {
       const hx = b.x + side * 30
       const hy = b.y + 40
       const aim = Math.atan2(g.player.y - hy, g.player.x - hx) + side * 0.12
-      fire(g, hx, hy, aim, 210, 14, '#fff6e0', { hand: side, rot: 0, spin: side * 7 })
+      // homing: 追尾する残り秒数（ずっと追尾すると避けられないので時間制限つき）
+      fire(g, hx, hy, aim, 330, 14, '#fff6e0', { hand: side, rot: 0, spin: side * 12, homing: 1.3 })
     }
   }
 
@@ -264,6 +265,17 @@ function update(g, dt, keys) {
       e.vy = e.vx * s + e.vy * c
       e.vx = vx
       e.curve *= Math.exp(-0.6 * dt)
+    }
+    if (e.homing > 0) {
+      // 追尾：自機の方向へ少しずつ向きを変える（1秒に最大3.2ラジアン）
+      e.homing -= dt
+      const cur = Math.atan2(e.vy, e.vx)
+      let diff = Math.atan2(p.y - e.y, p.x - e.x) - cur
+      diff = Math.atan2(Math.sin(diff), Math.cos(diff))
+      const turn = Math.max(-3.2 * dt, Math.min(3.2 * dt, diff))
+      const sp = Math.hypot(e.vx, e.vy)
+      e.vx = Math.cos(cur + turn) * sp
+      e.vy = Math.sin(cur + turn) * sp
     }
     e.x += e.vx * dt
     e.y += e.vy * dt
