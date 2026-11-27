@@ -1,122 +1,422 @@
-import { useState } from 'react'
-import heroImg from './assets/hero.png'
-import reactLogo from './assets/react.svg'
-import viteLogo from './assets/vite.svg'
+import { useEffect, useRef, useState } from 'react'
 import './App.css'
 
-function App() {
-  const [count, setCount] = useState(0)
+// ===== ゲームの基本設定 =====
+const W = 480
+const H = 640
+const BOSS_HP = 600
+const BEST_KEY = 'barrage-best-score'
 
-  return (
-    <>
-      <section id="center">
-        <div className="hero">
-          <img src={heroImg} className="base" width="170" height="179" alt="" />
-          <img src={reactLogo} className="framework" alt="React logo" />
-          <img src={viteLogo} className="vite" alt="Vite logo" />
-        </div>
-        <div>
-          <h1>Get started</h1>
-          <p>
-            Edit <code>src/App.jsx</code> and save to test <code>HMR</code>
-          </p>
-        </div>
-        <button
-          type="button"
-          className="counter"
-          onClick={() => setCount((count) => count + 1)}
-        >
-          Count is {count}
-        </button>
-      </section>
-
-      <div className="ticks"></div>
-
-      <section id="next-steps">
-        <div id="docs">
-          <svg className="icon" role="presentation" aria-hidden="true">
-            <use href="/icons.svg#documentation-icon"></use>
-          </svg>
-          <h2>Documentation</h2>
-          <p>Your questions, answered</p>
-          <ul>
-            <li>
-              <a href="https://vite.dev/" target="_blank">
-                <img className="logo" src={viteLogo} alt="" />
-                Explore Vite
-              </a>
-            </li>
-            <li>
-              <a href="https://react.dev/" target="_blank">
-                <img className="button-icon" src={reactLogo} alt="" />
-                Learn more
-              </a>
-            </li>
-          </ul>
-        </div>
-        <div id="social">
-          <svg className="icon" role="presentation" aria-hidden="true">
-            <use href="/icons.svg#social-icon"></use>
-          </svg>
-          <h2>Connect with us</h2>
-          <p>Join the Vite community</p>
-          <ul>
-            <li>
-              <a href="https://github.com/vitejs/vite" target="_blank">
-                <svg
-                  className="button-icon"
-                  role="presentation"
-                  aria-hidden="true"
-                >
-                  <use href="/icons.svg#github-icon"></use>
-                </svg>
-                GitHub
-              </a>
-            </li>
-            <li>
-              <a href="https://chat.vite.dev/" target="_blank">
-                <svg
-                  className="button-icon"
-                  role="presentation"
-                  aria-hidden="true"
-                >
-                  <use href="/icons.svg#discord-icon"></use>
-                </svg>
-                Discord
-              </a>
-            </li>
-            <li>
-              <a href="https://x.com/vite_js" target="_blank">
-                <svg
-                  className="button-icon"
-                  role="presentation"
-                  aria-hidden="true"
-                >
-                  <use href="/icons.svg#x-icon"></use>
-                </svg>
-                X.com
-              </a>
-            </li>
-            <li>
-              <a href="https://bsky.app/profile/vite.dev" target="_blank">
-                <svg
-                  className="button-icon"
-                  role="presentation"
-                  aria-hidden="true"
-                >
-                  <use href="/icons.svg#bluesky-icon"></use>
-                </svg>
-                Bluesky
-              </a>
-            </li>
-          </ul>
-        </div>
-      </section>
-
-      <div className="ticks"></div>
-      <section id="spacer"></section>
-    </>
-  )
+// ベストスコアの読み書き（使えない環境でも落ちないように try/catch）
+function loadBest() {
+  try {
+    return Number(localStorage.getItem(BEST_KEY)) || 0
+  } catch {
+    return 0
+  }
+}
+function saveBest(score) {
+  try {
+    localStorage.setItem(BEST_KEY, String(score))
+  } catch {
+    /* 保存できなくてもゲームは続ける */
+  }
 }
 
-export default App
+// ===== ゲーム状態の作成 =====
+function createGame() {
+  return {
+    player: { x: W / 2, y: H - 80, r: 3, invuln: 2 },
+    shots: [],
+    bullets: [],
+    particles: [],
+    boss: { x: W / 2, y: 120, r: 28, hp: BOSS_HP, t: 0, fire: 0, fire2: 0, angle: 0, flash: 0 },
+    score: 0,
+    lives: 3,
+    time: 0,
+    shotCd: 0,
+    stars: Array.from({ length: 70 }, () => ({
+      x: Math.random() * W,
+      y: Math.random() * H,
+      s: 20 + Math.random() * 90,
+    })),
+  }
+}
+
+function fire(g, x, y, angle, speed, r, color) {
+  g.bullets.push({ x, y, vx: Math.cos(angle) * speed, vy: Math.sin(angle) * speed, r, color })
+}
+
+function burst(g, x, y, color, count) {
+  for (let i = 0; i < count; i++) {
+    const a = Math.random() * Math.PI * 2
+    const s = 60 + Math.random() * 240
+    g.particles.push({ x, y, vx: Math.cos(a) * s, vy: Math.sin(a) * s, life: 0.6 + Math.random() * 0.5, color })
+  }
+}
+
+// ===== 背景・パーティクル（タイトル画面でも動かす） =====
+function updateAmbient(g, dt) {
+  for (const s of g.stars) {
+    s.y += s.s * dt
+    if (s.y > H) {
+      s.y = 0
+      s.x = Math.random() * W
+    }
+  }
+  for (const p of g.particles) {
+    p.x += p.vx * dt
+    p.y += p.vy * dt
+    p.vx *= 0.96
+    p.vy *= 0.96
+    p.life -= dt
+  }
+  g.particles = g.particles.filter((p) => p.life > 0)
+}
+
+// ===== ボスの弾幕パターン =====
+function bossAttack(g, dt) {
+  const b = g.boss
+  const ratio = b.hp / BOSS_HP
+  b.fire -= dt
+  b.fire2 -= dt
+
+  if (ratio > 2 / 3) {
+    // フェーズ1：回転する4方向スパイラル
+    if (b.fire <= 0) {
+      b.fire = 0.06
+      b.angle += 0.27
+      for (let k = 0; k < 4; k++) {
+        fire(g, b.x, b.y, b.angle + (k * Math.PI) / 2, 150, 5, '#ff6b9d')
+      }
+    }
+  } else if (ratio > 1 / 3) {
+    // フェーズ2：全方位リング ＋ 自機狙い5WAY
+    if (b.fire <= 0) {
+      b.fire = 0.7
+      const offset = Math.random() * Math.PI
+      for (let k = 0; k < 28; k++) {
+        fire(g, b.x, b.y, offset + (k * Math.PI * 2) / 28, 120, 6, '#6bc7ff')
+      }
+    }
+    if (b.fire2 <= 0) {
+      b.fire2 = 0.9
+      const aim = Math.atan2(g.player.y - b.y, g.player.x - b.x)
+      for (let k = -2; k <= 2; k++) {
+        fire(g, b.x, b.y, aim + k * 0.18, 230, 5, '#ffd56b')
+      }
+    }
+  } else {
+    // フェーズ3：逆回転の二重スパイラル ＋ リング
+    if (b.fire <= 0) {
+      b.fire = 0.05
+      b.angle += 0.21
+      for (let k = 0; k < 3; k++) {
+        const base = (k * Math.PI * 2) / 3
+        fire(g, b.x, b.y, b.angle + base, 135, 5, '#c58bff')
+        fire(g, b.x, b.y, -b.angle + base, 135, 5, '#7dffb0')
+      }
+    }
+    if (b.fire2 <= 0) {
+      b.fire2 = 1.3
+      for (let k = 0; k < 20; k++) {
+        fire(g, b.x, b.y, (k * Math.PI * 2) / 20, 95, 8, '#ff9a5c')
+      }
+    }
+  }
+}
+
+// ===== 1フレーム分の更新。終了時は 'over' か 'clear' を返す =====
+function update(g, dt, keys) {
+  g.time += dt
+  updateAmbient(g, dt)
+
+  // 自機の移動
+  const p = g.player
+  const slow = keys.has('Shift')
+  const speed = slow ? 140 : 280
+  let dx = 0
+  let dy = 0
+  if (keys.has('ArrowLeft') || keys.has('a')) dx -= 1
+  if (keys.has('ArrowRight') || keys.has('d')) dx += 1
+  if (keys.has('ArrowUp') || keys.has('w')) dy -= 1
+  if (keys.has('ArrowDown') || keys.has('s')) dy += 1
+  if (dx && dy) {
+    dx *= Math.SQRT1_2
+    dy *= Math.SQRT1_2
+  }
+  p.x = Math.max(10, Math.min(W - 10, p.x + dx * speed * dt))
+  p.y = Math.max(10, Math.min(H - 10, p.y + dy * speed * dt))
+  p.invuln = Math.max(0, p.invuln - dt)
+
+  // 自機ショット（自動連射）
+  g.shotCd -= dt
+  if (g.shotCd <= 0) {
+    g.shotCd = 0.07
+    g.shots.push({ x: p.x - 6, y: p.y - 10 }, { x: p.x + 6, y: p.y - 10 })
+  }
+  const b = g.boss
+  for (const s of g.shots) {
+    s.y -= 700 * dt
+    if (Math.hypot(s.x - b.x, s.y - b.y) < b.r + 4) {
+      s.dead = true
+      b.hp -= 1
+      b.flash = 0.05
+      g.score += 10
+    }
+  }
+  g.shots = g.shots.filter((s) => !s.dead && s.y > -20)
+
+  // ボスの移動と攻撃
+  b.t += dt
+  b.flash = Math.max(0, b.flash - dt)
+  b.x = W / 2 + Math.sin(b.t * 0.7) * 120
+  b.y = 120 + Math.sin(b.t * 1.3) * 20
+  bossAttack(g, dt)
+
+  // 敵弾の移動
+  for (const e of g.bullets) {
+    e.x += e.vx * dt
+    e.y += e.vy * dt
+  }
+  g.bullets = g.bullets.filter((e) => e.x > -20 && e.x < W + 20 && e.y > -20 && e.y < H + 20)
+
+  // 被弾判定
+  if (p.invuln === 0) {
+    for (const e of g.bullets) {
+      if (Math.hypot(e.x - p.x, e.y - p.y) < e.r + p.r) {
+        g.lives -= 1
+        burst(g, p.x, p.y, '#ffffff', 40)
+        g.bullets = []
+        if (g.lives <= 0) return 'over'
+        p.invuln = 2
+        break
+      }
+    }
+  }
+
+  // ボス撃破
+  if (b.hp <= 0) {
+    burst(g, b.x, b.y, '#ffd56b', 120)
+    g.bullets = []
+    g.score += g.lives * 5000 + Math.max(0, Math.floor(120 - g.time)) * 100
+    return 'clear'
+  }
+  return null
+}
+
+// ===== 描画 =====
+function draw(ctx, g, screen) {
+  ctx.fillStyle = '#0b0b1a'
+  ctx.fillRect(0, 0, W, H)
+
+  // 星
+  for (const s of g.stars) {
+    ctx.fillStyle = `rgba(255,255,255,${s.s / 140})`
+    ctx.fillRect(s.x, s.y, 2, 2)
+  }
+
+  // ボス
+  const b = g.boss
+  if (b.hp > 0) {
+    const grad = ctx.createRadialGradient(b.x, b.y, 4, b.x, b.y, b.r)
+    grad.addColorStop(0, b.flash > 0 ? '#ffffff' : '#ffe0f0')
+    grad.addColorStop(1, b.flash > 0 ? '#ffb0d0' : '#d1366f')
+    ctx.fillStyle = grad
+    ctx.beginPath()
+    ctx.arc(b.x, b.y, b.r, 0, Math.PI * 2)
+    ctx.fill()
+  }
+
+  // 自機ショット
+  ctx.fillStyle = '#9ef0ff'
+  for (const s of g.shots) ctx.fillRect(s.x - 1.5, s.y - 8, 3, 12)
+
+  // 自機
+  const p = g.player
+  if (screen === 'playing' && !(p.invuln > 0 && Math.floor(p.invuln * 12) % 2 === 0)) {
+    ctx.fillStyle = '#7fd8ff'
+    ctx.beginPath()
+    ctx.moveTo(p.x, p.y - 14)
+    ctx.lineTo(p.x - 10, p.y + 10)
+    ctx.lineTo(p.x, p.y + 5)
+    ctx.lineTo(p.x + 10, p.y + 10)
+    ctx.closePath()
+    ctx.fill()
+    // 当たり判定（中心の白い点）
+    ctx.fillStyle = '#ffffff'
+    ctx.beginPath()
+    ctx.arc(p.x, p.y, p.r + 1, 0, Math.PI * 2)
+    ctx.fill()
+  }
+
+  // 敵弾
+  for (const e of g.bullets) {
+    ctx.fillStyle = e.color
+    ctx.beginPath()
+    ctx.arc(e.x, e.y, e.r, 0, Math.PI * 2)
+    ctx.fill()
+    ctx.fillStyle = '#ffffff'
+    ctx.beginPath()
+    ctx.arc(e.x, e.y, e.r * 0.5, 0, Math.PI * 2)
+    ctx.fill()
+  }
+
+  // パーティクル
+  for (const pt of g.particles) {
+    ctx.globalAlpha = Math.min(1, pt.life * 2)
+    ctx.fillStyle = pt.color
+    ctx.fillRect(pt.x - 1.5, pt.y - 1.5, 3, 3)
+  }
+  ctx.globalAlpha = 1
+
+  // HUD
+  if (screen !== 'title') {
+    ctx.fillStyle = 'rgba(255,255,255,0.15)'
+    ctx.fillRect(20, 16, W - 40, 6)
+    ctx.fillStyle = '#ff6b9d'
+    ctx.fillRect(20, 16, ((W - 40) * Math.max(0, b.hp)) / BOSS_HP, 6)
+
+    ctx.fillStyle = '#ffffff'
+    ctx.font = '14px system-ui, sans-serif'
+    ctx.textAlign = 'left'
+    ctx.fillText(`SCORE ${g.score}`, 20, 42)
+    ctx.textAlign = 'right'
+    ctx.fillText(`${'♥'.repeat(Math.max(0, g.lives))}  ${g.time.toFixed(1)}s`, W - 20, 42)
+  }
+}
+
+// ===== React コンポーネント =====
+export default function App() {
+  const canvasRef = useRef(null)
+  const gameRef = useRef(null)
+  const screenRef = useRef('title')
+  const keysRef = useRef(new Set())
+  const dragRef = useRef(null)
+  const [screen, setScreen] = useState('title')
+  const [result, setResult] = useState({ score: 0, time: 0, best: loadBest(), newBest: false })
+
+  const start = () => {
+    gameRef.current = createGame()
+    keysRef.current.clear()
+    screenRef.current = 'playing'
+    setScreen('playing')
+  }
+
+  // ゲームループ
+  useEffect(() => {
+    const ctx = canvasRef.current.getContext('2d')
+    if (!gameRef.current) gameRef.current = createGame()
+    let last = performance.now()
+    let raf
+
+    const loop = (now) => {
+      const dt = Math.min((now - last) / 1000, 1 / 30)
+      last = now
+      const g = gameRef.current
+      if (screenRef.current === 'playing') {
+        const end = update(g, dt, keysRef.current)
+        if (end) {
+          const best = loadBest()
+          const newBest = g.score > best
+          if (newBest) saveBest(g.score)
+          screenRef.current = end
+          setResult({ score: g.score, time: g.time, best: Math.max(best, g.score), newBest })
+          setScreen(end)
+        }
+      } else {
+        updateAmbient(g, dt)
+      }
+      draw(ctx, g, screenRef.current)
+      raf = requestAnimationFrame(loop)
+    }
+    raf = requestAnimationFrame(loop)
+    return () => cancelAnimationFrame(raf)
+  }, [])
+
+  // キーボード操作
+  useEffect(() => {
+    const normalize = (key) => (key.length === 1 ? key.toLowerCase() : key)
+    const onDown = (e) => {
+      if (['ArrowUp', 'ArrowDown', 'ArrowLeft', 'ArrowRight', ' '].includes(e.key)) e.preventDefault()
+      if (screenRef.current !== 'playing' && (e.key === 'Enter' || e.key === ' ')) {
+        start()
+        return
+      }
+      keysRef.current.add(normalize(e.key))
+    }
+    const onUp = (e) => keysRef.current.delete(normalize(e.key))
+    const onBlur = () => keysRef.current.clear()
+    window.addEventListener('keydown', onDown)
+    window.addEventListener('keyup', onUp)
+    window.addEventListener('blur', onBlur)
+    return () => {
+      window.removeEventListener('keydown', onDown)
+      window.removeEventListener('keyup', onUp)
+      window.removeEventListener('blur', onBlur)
+    }
+  }, [])
+
+  // タッチ・マウスのドラッグ操作（指を動かした分だけ自機が動く）
+  const onPointerDown = (e) => {
+    if (screenRef.current !== 'playing') return
+    e.currentTarget.setPointerCapture(e.pointerId)
+    dragRef.current = { x: e.clientX, y: e.clientY }
+  }
+  const onPointerMove = (e) => {
+    if (!dragRef.current || screenRef.current !== 'playing') return
+    const rect = e.currentTarget.getBoundingClientRect()
+    const scale = W / rect.width
+    const p = gameRef.current.player
+    p.x = Math.max(10, Math.min(W - 10, p.x + (e.clientX - dragRef.current.x) * scale))
+    p.y = Math.max(10, Math.min(H - 10, p.y + (e.clientY - dragRef.current.y) * scale))
+    dragRef.current = { x: e.clientX, y: e.clientY }
+  }
+  const onPointerUp = () => {
+    dragRef.current = null
+  }
+
+  return (
+    <main className="game">
+      <div className="stage">
+        <canvas
+          ref={canvasRef}
+          width={W}
+          height={H}
+          onPointerDown={onPointerDown}
+          onPointerMove={onPointerMove}
+          onPointerUp={onPointerUp}
+          onPointerCancel={onPointerUp}
+        />
+
+        {screen === 'title' && (
+          <div className="overlay">
+            <h1>STAR BARRAGE</h1>
+            <p className="sub">簡易弾幕シューティング</p>
+            <ul className="help">
+              <li>移動：矢印キー / WASD（スマホはドラッグ）</li>
+              <li>低速移動：Shift</li>
+              <li>ショットは自動で連射</li>
+              <li>中心の白い点だけが当たり判定</li>
+            </ul>
+            <button onClick={start}>スタート</button>
+            <p className="hint">Enter / Space でも開始</p>
+          </div>
+        )}
+
+        {(screen === 'over' || screen === 'clear') && (
+          <div className="overlay">
+            <h1>{screen === 'clear' ? 'STAGE CLEAR!' : 'GAME OVER'}</h1>
+            <p className="score">SCORE {result.score}</p>
+            <p className="sub">
+              {result.time.toFixed(1)} 秒 ／ BEST {result.best}
+              {result.newBest && ' 🎉 新記録！'}
+            </p>
+            <button onClick={start}>もう一度</button>
+            <p className="hint">Enter / Space でも開始</p>
+          </div>
+        )}
+      </div>
+    </main>
+  )
+}
