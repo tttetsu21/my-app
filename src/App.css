@@ -40,7 +40,7 @@
 
 .overlay h1 {
   margin: 0;
-  font-size: clamp(28px, 8vw, 42px);
+  font-size: clamp(24px, 7vw, 38px);
   letter-spacing: 0.06em;
   color: #ff8fb8;
   text-shadow: 0 0 18px rgba(255, 107, 157, 0.7);

@@ -538,7 +538,7 @@ export default function App() {
 
         {screen === 'title' && (
           <div className="overlay">
-            <h1>STAR BARRAGE</h1>
+            <h1>Kanadooに挑戦！</h1>
             <p className="sub">簡易弾幕シューティング</p>
             <ul className="help">
               <li>移動：矢印キー / WASD（スマホはドラッグ）</li>
