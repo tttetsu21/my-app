@@ -1,5 +1,11 @@
 import { useEffect, useRef, useState } from 'react'
 import './App.css'
+import bossUrl from './assets/boss.png'
+
+// ボスの画像（読み込み前は丸で代わりに描く）
+const bossImg = new Image()
+bossImg.src = bossUrl
+const BOSS_SIZE = 110
 
 // ===== ゲームの基本設定 =====
 const W = 480
@@ -37,7 +43,7 @@ function createGame() {
     shots: [],
     bullets: [],
     particles: [],
-    boss: { x: W / 2, y: 120, r: 28, hp: BOSS_HP, t: 0, fire: 0, fire2: 0, angle: 0, flash: 0, phase: 0 },
+    boss: { x: W / 2, y: 120, r: 38, hp: BOSS_HP, t: 0, fire: 0, fire2: 0, angle: 0, flash: 0, phase: 0 },
     banner: 2,
     score: 0,
     lives: 3,
@@ -297,7 +303,15 @@ function draw(ctx, g, screen) {
 
   // ボス
   const b = g.boss
-  if (b.hp > 0) {
+  if (b.hp > 0 && bossImg.complete && bossImg.naturalWidth > 0) {
+    // ゆらゆら揺れながら描く。被弾中は明るく光らせる
+    ctx.save()
+    ctx.translate(b.x, b.y)
+    ctx.rotate(Math.sin(b.t * 2) * 0.12)
+    if (b.flash > 0) ctx.filter = 'brightness(1.8)'
+    ctx.drawImage(bossImg, -BOSS_SIZE / 2, -BOSS_SIZE / 2, BOSS_SIZE, BOSS_SIZE)
+    ctx.restore()
+  } else if (b.hp > 0) {
     const grad = ctx.createRadialGradient(b.x, b.y, 4, b.x, b.y, b.r)
     grad.addColorStop(0, b.flash > 0 ? '#ffffff' : '#ffe0f0')
     grad.addColorStop(1, b.flash > 0 ? '#ffb0d0' : '#d1366f')
