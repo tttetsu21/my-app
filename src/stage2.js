@@ -41,14 +41,25 @@ const BUTTONS = [
 const TURN_MODES = ['normal', 'gravity', 'shield']
 
 // 相手のターンの攻撃パターン（同じモードの中で順番に使う）
-const PATTERNS = ['rain', 'hands', 'aim', 'walls']
-const GRAVITY_PATTERNS = ['pillars', 'bounce']
+const PATTERNS = ['rain', 'colors', 'hands', 'walls', 'aim']
+const GRAVITY_PATTERNS = ['pillars', 'slam', 'bounce']
+
+// 色つき攻撃：青は止まっていれば当たらない、オレンジは動いていれば当たらない
+const BLUE = '#3da5ff'
+const ORANGE = '#ff9a2e'
 
 // 重力状態の物理（px/秒）
 const GRAVITY = 900
 const JUMP_V = 400 // ジャンプの初速（最高で約90px跳ぶ）
 const GRAVITY_COLOR = '#ffb347' // 重力状態のときの自機の色
-const JUMP_KEYS = ['ArrowUp', 'w', ' ']
+const SLAM_V = 1100 // 壁に打ちつけられるときの速さ
+// 重力の向き。away は「壁から離れる（ジャンプする）」キー
+const GDIRS = {
+  down: { x: 0, y: 1, away: ['ArrowUp', 'w'] },
+  up: { x: 0, y: -1, away: ['ArrowDown', 's'] },
+  left: { x: -1, y: 0, away: ['ArrowRight', 'd'] },
+  right: { x: 1, y: 0, away: ['ArrowLeft', 'a'] },
+}
 
 // 盾モード：矢が上下左右から飛んでくるので、盾をその方向に向けて防ぐ
 const SHIELD_COLOR = '#5cf2ff'
@@ -127,6 +138,19 @@ function isRage(bt) {
 // このターンの相手の攻撃のモード
 function turnMode(bt) {
   return TURN_MODES[bt.turn % TURN_MODES.length]
+}
+
+// このターンのメインの攻撃パターン（同じモードの中で順番に使う）
+function mainPattern(bt) {
+  const half = Math.floor(bt.turn / TURN_MODES.length)
+  if (bt.mode === 'gravity') return GRAVITY_PATTERNS[half % GRAVITY_PATTERNS.length]
+  if (bt.mode === 'normal') return PATTERNS[half % PATTERNS.length]
+  return null
+}
+
+// 相手のターンの長さ（盾モードは5秒長い）
+function turnLength(g, bt) {
+  return lv(g, 5, 6, 7) + (bt.mode === 'shield' ? 5 : 0)
 }
 
 // 自分のターンに枠の中に出す一言
@@ -282,14 +306,23 @@ function startEnemyTurn(g) {
   bt.cds = {}
   bt.mode = turnMode(bt)
   bt.gravity = bt.mode === 'gravity'
+  bt.pattern = mainPattern(bt)
+  bt.gdir = 'down'
+  bt.slamming = false
+  bt.jumpBuffer = 0
+  bt.colorSide = Math.random() < 0.5 ? -1 : 1 // 色つきの柱はすべて同じ側から来る（青とオレンジが同時に重ならない）
   bt.vy = 0
   bt.tapJump = false
   bt.jumpHeld = true // 決定キーを押しっぱなしでいきなり跳ばないように
-  if (bt.gravity) popup(g, W / 2, DODGE_BOX.y - 10, '重力！ ↑でジャンプ', GRAVITY_COLOR)
-  bt.ptimer = lv(g, 5, 6, 7) + 0.4 // 最初の0.4秒は枠の変形を待つ
+  if (bt.pattern === 'slam') popup(g, W / 2, DODGE_BOX.y - 10, '重力が暴れる！ 打ちつけられたら反対へ跳べ', GRAVITY_COLOR)
+  else if (bt.gravity) popup(g, W / 2, DODGE_BOX.y - 10, '重力！ ↑でジャンプ', GRAVITY_COLOR)
+  if (bt.pattern === 'colors') popup(g, W / 2, DODGE_BOX.y - 10, '青は止まれ！ オレンジは動け！', ORANGE)
+  bt.ptimer = turnLength(g, bt) + 0.4 // 最初の0.4秒は枠の変形を待つ
   const p = g.player
   p.x = DODGE_BOX.x + DODGE_BOX.w / 2
   p.y = DODGE_BOX.y + DODGE_BOX.h * 0.7
+  bt.prevX = p.x
+  bt.prevY = p.y
   if (bt.mode === 'shield') {
     p.x = SHIELD_BOX.x + SHIELD_BOX.w / 2
     p.y = SHIELD_BOX.y + SHIELD_BOX.h / 2
@@ -320,14 +353,12 @@ function spawnPatterns(g, dt) {
   }
   const shoot = (x, y, vx, vy, r, color, extra) => bt.bullets.push({ x, y, vx: vx * sp, vy: vy * sp, r, color, ...extra })
 
-  const half = Math.floor(bt.turn / TURN_MODES.length)
+  const main = bt.pattern
   let list
   if (bt.gravity) {
-    // 重力状態：床をすべる柱・はねる手。体力が半分を切ると上から雨も降る
-    const main = GRAVITY_PATTERNS[half % GRAVITY_PATTERNS.length]
+    // 重力状態：床をすべる柱・壁に打ちつけ・はねる手。体力が半分を切ると上から雨も降る
     list = rage ? [[main, 1], ['rain', lv(g, 3, 2.4, 1.8)]] : [[main, 1]]
   } else {
-    const main = PATTERNS[half % PATTERNS.length]
     // 体力が半分を切ると、別のパターンが少しゆっくり重なる
     list = rage ? [[main, 1], [main === 'aim' ? 'rain' : 'aim', 1.6]] : [[main, 1]]
   }
@@ -341,12 +372,36 @@ function spawnPatterns(g, dt) {
         shoot(x, box.y - 8, lv(g, 0, 0, (Math.random() - 0.5) * 60), lv(g, 130, 160, 190), 5, '#6bc7ff')
       }
     } else if (name === 'hands') {
-      // 左右から手が回転しながら横切る
-      if (cd('hands' + slow, lv(g, 1.0, 0.7, 0.5) * slow)) {
-        const side = Math.random() < 0.5 ? -1 : 1
-        const y = box.y + 15 + Math.random() * (box.h - 30)
-        const x = side < 0 ? box.x - 30 : box.x + box.w + 30
-        shoot(x, y, -side * lv(g, 150, 190, 230), 0, 12, '#fff6e0', { hand: side, rot: 0, spin: side * 10 })
+      // 左右から手が回転しながら横切る（ノーマル以上はときどき左右から同時に）
+      if (cd('hands' + slow, lv(g, 0.6, 0.42, 0.3) * slow)) {
+        const both = Math.random() < lv(g, 0, 0.3, 0.5)
+        const sides = both ? [-1, 1] : [Math.random() < 0.5 ? -1 : 1]
+        for (const side of sides) {
+          const y = box.y + 15 + Math.random() * (box.h - 30)
+          const x = side < 0 ? box.x - 30 : box.x + box.w + 30
+          shoot(x, y, -side * lv(g, 150, 190, 230), 0, 12, '#fff6e0', { hand: side, rot: 0, spin: side * 10 })
+        }
+      }
+    } else if (name === 'colors') {
+      // 縦いっぱいの柱が横切る。青は止まっていれば、オレンジは動いていれば当たらない
+      if (cd('colors' + slow, lv(g, 1.3, 1.0, 0.8) * slow)) {
+        const side = bt.colorSide
+        const x = side < 0 ? box.x - 8 : box.x + box.w + 8
+        const blue = Math.random() < 0.5
+        const vx = -side * lv(g, 110, 130, 150)
+        for (let y = box.y + 6; y < box.y + box.h; y += 12) {
+          shoot(x, y, vx, 0, 6, blue ? BLUE : ORANGE, { cmode: blue ? 'blue' : 'orange' })
+        }
+      }
+    } else if (name === 'slam') {
+      // 重力の向きが変わって壁に打ちつけられ、その壁からトゲが出る → すぐ反対へジャンプ
+      if (cd('slam', lv(g, 2.2, 1.8, 1.5))) {
+        const dirs = Object.keys(GDIRS).filter((d) => d !== bt.gdir)
+        bt.gdir = dirs[Math.floor(Math.random() * dirs.length)]
+        bt.vy = SLAM_V
+        bt.slamming = true
+        bt.jumpBuffer = 0
+        bt.shortHop = false
       }
     } else if (name === 'aim') {
       // 枠の外の四方八方から自機を狙ってくる
@@ -469,7 +524,15 @@ function updateEnemyTurn(g, dt, keys) {
   if (keys.has('ArrowLeft') || keys.has('a')) dx -= 1
   if (keys.has('ArrowRight') || keys.has('d')) dx += 1
   if (bt.gravity) {
-    moveWithGravity(bt, p, box, keys, dt)
+    moveWithGravity(g, bt, p, box, keys, dt)
+    if (bt.gdir === 'left' || bt.gdir === 'right') {
+      // 横向きの重力のときは上下に移動する
+      let ly = 0
+      if (keys.has('ArrowUp') || keys.has('w')) ly -= 1
+      if (keys.has('ArrowDown') || keys.has('s')) ly += 1
+      p.y = Math.max(box.y + 8, Math.min(box.y + box.h - 8, p.y + ly * speed * dt))
+      dx = 0
+    }
   } else {
     if (keys.has('ArrowUp') || keys.has('w')) dy -= 1
     if (keys.has('ArrowDown') || keys.has('s')) dy += 1
@@ -482,7 +545,13 @@ function updateEnemyTurn(g, dt, keys) {
   p.x = Math.max(box.x + 8, Math.min(box.x + box.w - 8, p.x + dx * speed * dt))
 
   bt.ptimer -= dt
-  if (bt.ptimer < lv(g, 5, 6, 7)) spawnPatterns(g, dt)
+  if (bt.ptimer < turnLength(g, bt)) spawnPatterns(g, dt)
+
+  // このフレームで動いたか（色つき攻撃の判定用。ドラッグでの移動もふくむ）
+  const moving = Math.hypot(p.x - bt.prevX, p.y - bt.prevY) > 0.5
+  bt.moving = moving
+  bt.prevX = p.x
+  bt.prevY = p.y
 
   const floor = box.y + box.h
   for (const e of bt.bullets) {
@@ -494,18 +563,27 @@ function updateEnemyTurn(g, dt, keys) {
         e.vy = -e.hop
       }
     }
+    if (e.spike) {
+      // トゲ：予告（warn）のあと、少しのあいだだけ出る
+      if (e.warn > 0) e.warn -= dt
+      else e.life -= dt
+    }
     e.x += e.vx * dt
     e.y += e.vy * dt
     if (e.spin) e.rot += e.spin * dt
   }
   const m = 120
   bt.bullets = bt.bullets.filter(
-    (e) => e.x > box.x - m && e.x < box.x + box.w + m && e.y > box.y - m && e.y < box.y + box.h + m,
+    (e) =>
+      !(e.spike && e.life <= 0) && e.x > box.x - m && e.x < box.x + box.w + m && e.y > box.y - m && e.y < box.y + box.h + m,
   )
 
   // 被弾
   if (p.invuln === 0) {
     for (const e of bt.bullets) {
+      if (e.spike && e.warn > 0) continue // 予告中のトゲは当たらない
+      if (e.cmode === 'blue' && !moving) continue // 青：止まっていればセーフ
+      if (e.cmode === 'orange' && moving) continue // オレンジ：動いていればセーフ
       if (Math.hypot(e.x - p.x, e.y - p.y) < e.r + p.r) {
         const dmg = lv(g, 3, 4, 5)
         bt.hp = Math.max(0, bt.hp - dmg)
@@ -576,7 +654,7 @@ function updateShieldTurn(g, dt) {
   const p = g.player
   const cx = p.x
   const cy = p.y
-  const end = lv(g, 5, 6, 7) + 0.4 // ptimer と同じ長さ
+  const end = turnLength(g, bt) + 0.4 // ptimer と同じ長さ
   bt.stime += dt
   bt.ptimer -= dt
 
@@ -674,30 +752,65 @@ function drawShield(ctx, g) {
 
 // 重力状態の自機：床に落ち、↑・W・Space（またはタップ）でジャンプ
 // キーを早めに離すと低いジャンプになる
-function moveWithGravity(bt, p, box, keys, dt) {
-  const floor = box.y + box.h - 8
-  const held = JUMP_KEYS.some((k) => keys.has(k))
-  const onGround = p.y >= floor - 0.5
-  if (onGround && ((held && !bt.jumpHeld) || bt.tapJump)) {
+// 重力は上下左右どの向きにもなる。pos は「重力の向きにどれだけ進んだか」（大きいほど床＝壁に近い）
+// ジャンプは壁から離れる向きのキー（下向き重力なら ↑）か Space・タップ
+// 着地の少し前（0.15秒）に押しても、着地した瞬間にジャンプする
+function moveWithGravity(g, bt, p, box, keys, dt) {
+  const d = GDIRS[bt.gdir]
+  const held = d.away.some((k) => keys.has(k)) || keys.has(' ')
+  const lo = d.x ? (d.x > 0 ? box.x + 8 : -(box.x + box.w - 8)) : d.y > 0 ? box.y + 8 : -(box.y + box.h - 8)
+  const floor = d.x ? (d.x > 0 ? box.x + box.w - 8 : -(box.x + 8)) : d.y > 0 ? box.y + box.h - 8 : -(box.y + 8)
+  let pos = d.x ? p.x * d.x : p.y * d.y
+  if ((held && !bt.jumpHeld) || bt.tapJump) bt.jumpBuffer = 0.15
+  const onGround = pos >= floor - 0.5 && !bt.slamming
+  if (onGround && bt.jumpBuffer > 0) {
     bt.vy = -JUMP_V
-    bt.shortHop = !bt.tapJump // タップのときは常に大ジャンプ
+    bt.shortHop = held // キーを押し続けていれば、離したとき小ジャンプにできる
+    bt.jumpBuffer = 0
   }
+  bt.jumpBuffer = Math.max(0, bt.jumpBuffer - dt)
   bt.tapJump = false
   if (!held && bt.vy < 0 && bt.shortHop) {
     bt.vy *= 0.45
     bt.shortHop = false
   }
   bt.jumpHeld = held
-  bt.vy += GRAVITY * dt
-  p.y += bt.vy * dt
-  if (p.y >= floor) {
-    p.y = floor
+  if (!bt.slamming) bt.vy += GRAVITY * dt
+  pos += bt.vy * dt
+  if (pos >= floor) {
+    pos = floor
     bt.vy = 0
+    if (bt.slamming) {
+      bt.slamming = false
+      slamImpact(g)
+    }
   }
-  if (p.y < box.y + 8) {
-    p.y = box.y + 8
+  if (pos < lo) {
+    pos = lo
     bt.vy = Math.max(0, bt.vy)
   }
+  if (d.x) p.x = pos * d.x
+  else p.y = pos * d.y
+}
+
+// 壁に打ちつけられた：その壁ぞいにトゲを出す（予告のあとに出る）
+function slamImpact(g) {
+  const bt = g.battle
+  const box = DODGE_BOX
+  const d = GDIRS[bt.gdir]
+  // 予告のあいだにジャンプすれば、着地する前にトゲが引っこむ長さにしてある
+  const warn = lv(g, 0.4, 0.34, 0.28)
+  const life = lv(g, 0.25, 0.3, 0.3)
+  const along = d.x ? box.h : box.w
+  for (let depth = 6; depth <= 30; depth += 12) {
+    for (let s = 6; s < along; s += 12) {
+      const x = d.x ? (d.x > 0 ? box.x + box.w - depth : box.x + depth) : box.x + s
+      const y = d.x ? box.y + s : d.y > 0 ? box.y + box.h - depth : box.y + depth
+      bt.bullets.push({ x, y, vx: 0, vy: 0, r: 6, color: '#ffffff', spike: true, warn, life })
+    }
+  }
+  burst(g, g.player.x, g.player.y, GRAVITY_COLOR, 14)
+  popup(g, g.player.x, g.player.y - 18, 'ドン！', GRAVITY_COLOR)
 }
 
 // ===== 描画 =====
@@ -801,9 +914,13 @@ export function drawBattle(ctx, g, screen) {
     for (const e of bt.bullets) drawBullet(ctx, e)
     ctx.restore()
     if (bt.gravity) {
-      // 重力状態：床をオレンジに光らせる
+      // 重力状態：重力の向きの壁（床）をオレンジに光らせる
+      const d = GDIRS[bt.gdir]
       ctx.fillStyle = GRAVITY_COLOR
-      ctx.fillRect(box.x + 2, box.y + box.h - 4, box.w - 4, 3)
+      if (d.y > 0) ctx.fillRect(box.x + 2, box.y + box.h - 4, box.w - 4, 3)
+      else if (d.y < 0) ctx.fillRect(box.x + 2, box.y + 1, box.w - 4, 3)
+      else if (d.x < 0) ctx.fillRect(box.x + 1, box.y + 2, 3, box.h - 4)
+      else ctx.fillRect(box.x + box.w - 4, box.y + 2, 3, box.h - 4)
     }
     if (screen === 'playing') drawShip(ctx, g.player, { scale: 0.8, skin: g.skin, aura: bt.gravity ? GRAVITY_COLOR : undefined })
   }
@@ -847,7 +964,11 @@ export function drawBattle(ctx, g, screen) {
       bt.mode === 'shield'
         ? '矢印キー・WASD・タップで 盾を向けろ（黄色は反対側に回り込む）'
         : bt.gravity
-          ? '重力状態！ ←→で移動 ／ ↑・W・Space・タップで ジャンプ'
+          ? bt.pattern === 'slam'
+            ? '打ちつけられた壁の 反対向きの矢印キー（Space・タップ）で ジャンプ！'
+            : '重力状態！ ←→で移動 ／ ↑・W・Space・タップで ジャンプ'
+          : bt.pattern === 'colors'
+            ? '青い柱は 止まって、オレンジの柱は 動いて よけろ！'
           : '矢印キー / ドラッグで よけろ！（Shiftで低速）',
   }
   ctx.fillStyle =
@@ -858,6 +979,26 @@ export function drawBattle(ctx, g, screen) {
 }
 
 function drawBullet(ctx, e) {
+  if (e.spike) {
+    if (e.warn > 0) {
+      // 予告：うすい赤の輪
+      ctx.strokeStyle = 'rgba(255,90,90,0.6)'
+      ctx.lineWidth = 1.5
+      ctx.beginPath()
+      ctx.arc(e.x, e.y, e.r - 1, 0, Math.PI * 2)
+      ctx.stroke()
+      return
+    }
+    ctx.fillStyle = '#ffffff'
+    ctx.beginPath()
+    ctx.arc(e.x, e.y, e.r, 0, Math.PI * 2)
+    ctx.fill()
+    ctx.fillStyle = '#ff5c5c'
+    ctx.beginPath()
+    ctx.arc(e.x, e.y, e.r * 0.5, 0, Math.PI * 2)
+    ctx.fill()
+    return
+  }
   if (e.hand && ready(handImg)) {
     ctx.save()
     ctx.translate(e.x, e.y)

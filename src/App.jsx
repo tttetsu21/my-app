@@ -765,10 +765,12 @@ export default function App() {
     const rect = e.currentTarget.getBoundingClientRect()
     const scale = W / rect.width
     const p = gameRef.current.player
-    p.x = Math.max(10, Math.min(W - 10, p.x + (e.clientX - dragRef.current.x) * scale))
-    // 重力状態のときは上下はドラッグで動かせない（タップでジャンプ）
+    // 重力状態のときは、重力の向きにはドラッグで動かせない（タップでジャンプ）
     const g = gameRef.current
-    if (!(g.stage === 2 && g.battle?.gravity))
+    const gdir = g.stage === 2 && g.battle?.gravity ? g.battle.gdir : null
+    if (gdir !== 'left' && gdir !== 'right')
+      p.x = Math.max(10, Math.min(W - 10, p.x + (e.clientX - dragRef.current.x) * scale))
+    if (gdir !== 'up' && gdir !== 'down')
       p.y = Math.max(10, Math.min(H - 10, p.y + (e.clientY - dragRef.current.y) * scale))
     dragRef.current = { x: e.clientX, y: e.clientY }
   }

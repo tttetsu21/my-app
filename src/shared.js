@@ -63,7 +63,7 @@ export const DIFFICULTIES = {
     score: 1.5,
     dropRate: 0.003,
     equipRate: 0.0025,
-    soulHp: 24,
+    soulHp: 30,
     boss2Hp: 390,
     color: '#ff6b6b',
     bestKey: 'barrage-best-score-hard',
