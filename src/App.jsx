@@ -19,10 +19,16 @@ const H = 640
 const PHASES = ['スパイラル', 'リング＆狙い撃ち', 'カーブ旋風', '花火', '二重スパイラル']
 
 // ===== 難易度設定 =====
-// hp: ボスの体力 / speed: 敵弾の速さ倍率 / score: スコア倍率
+// hp: ボスの体力 / lives: 残機 / speed: 敵弾の速さ倍率 / score: スコア倍率
 const DIFFICULTIES = {
-  normal: { key: 'normal', label: 'NORMAL', hp: 900, speed: 1, score: 1, color: '#7fd8ff', bestKey: 'barrage-best-score' },
-  hard: { key: 'hard', label: 'HARD', hp: 1200, speed: 1.15, score: 1.5, color: '#ff6b6b', bestKey: 'barrage-best-score-hard' },
+  easy: { key: 'easy', label: 'EASY', hp: 700, lives: 5, speed: 0.85, score: 0.5, color: '#7dffb0', bestKey: 'barrage-best-score-easy' },
+  normal: { key: 'normal', label: 'NORMAL', hp: 900, lives: 3, speed: 1, score: 1, color: '#7fd8ff', bestKey: 'barrage-best-score' },
+  hard: { key: 'hard', label: 'HARD', hp: 1200, lives: 3, speed: 1.15, score: 1.5, color: '#ff6b6b', bestKey: 'barrage-best-score-hard' },
+}
+
+// 難易度に応じて値を選ぶ：lv(g, イージーの値, ノーマルの値, ハードの値)
+function lv(g, easy, normal, hard) {
+  return g.easy ? easy : g.hard ? hard : normal
 }
 
 // 残りHPから今のフェーズ番号（0〜4）を求める
@@ -56,6 +62,7 @@ function saveBest(diff, score) {
 function createGame(diff = DIFFICULTIES.normal) {
   return {
     diff,
+    easy: diff.key === 'easy',
     hard: diff.key === 'hard',
     player: { x: W / 2, y: H - 80, r: 3, invuln: 2 },
     shots: [],
@@ -64,7 +71,7 @@ function createGame(diff = DIFFICULTIES.normal) {
     boss: { x: W / 2, y: 120, r: 38, hp: diff.hp, maxHp: diff.hp, t: 0, fire: 0, fire2: 0, fire3: 0, angle: 0, flash: 0, phase: 0, handCd: 2 },
     banner: 2,
     score: 0,
-    lives: 3,
+    lives: diff.lives,
     time: 0,
     shotCd: 0,
     stars: Array.from({ length: 70 }, () => ({
@@ -120,13 +127,13 @@ function bossAttack(g, dt) {
 
   // 全フェーズ共通：両手をくるくる回しながら自機めがけて投げる（後半ほど頻繁。ハードはさらに頻繁）
   if (b.handCd <= 0) {
-    b.handCd = hard ? 1.9 - b.phase * 0.25 : 2.4 - b.phase * 0.3
+    b.handCd = lv(g, 3.2 - b.phase * 0.3, 2.4 - b.phase * 0.3, 1.9 - b.phase * 0.25)
     for (const side of [-1, 1]) {
       const hx = b.x + side * 30
       const hy = b.y + 40
       const aim = Math.atan2(g.player.y - hy, g.player.x - hx) + side * 0.12
       // homing: 追尾する残り秒数（ずっと追尾すると避けられないので時間制限つき）
-      fire(g, hx, hy, aim, 330, 14, '#fff6e0', { hand: side, rot: 0, spin: side * 12, homing: 1.3 })
+      fire(g, hx, hy, aim, 330, 14, '#fff6e0', { hand: side, rot: 0, spin: side * 12, homing: lv(g, 0.7, 1.3, 1.3) })
     }
   }
 
@@ -134,9 +141,9 @@ function bossAttack(g, dt) {
     // フェーズ1：回転する4方向スパイラル
     // ハード：5方向に増え、さらに自機狙い3WAYが加わる
     if (b.fire <= 0) {
-      b.fire = hard ? 0.055 : 0.06
+      b.fire = lv(g, 0.08, 0.06, 0.055)
       b.angle += 0.27
-      const arms = hard ? 5 : 4
+      const arms = lv(g, 3, 4, 5)
       for (let k = 0; k < arms; k++) {
         fire(g, b.x, b.y, b.angle + (k * Math.PI * 2) / arms, 150, 5, '#ff6b9d')
       }
@@ -148,24 +155,24 @@ function bossAttack(g, dt) {
   } else if (b.phase === 1) {
     // フェーズ2：全方位リング ＋ 自機狙い5WAY（ハード：リング36発・7WAY・間隔短め）
     if (b.fire <= 0) {
-      b.fire = hard ? 0.55 : 0.7
-      const n = hard ? 36 : 28
+      b.fire = lv(g, 0.9, 0.7, 0.55)
+      const n = lv(g, 20, 28, 36)
       const offset = Math.random() * Math.PI
       for (let k = 0; k < n; k++) {
         fire(g, b.x, b.y, offset + (k * Math.PI * 2) / n, 120, 6, '#6bc7ff')
       }
     }
     if (b.fire2 <= 0) {
-      b.fire2 = hard ? 0.7 : 0.9
-      aimedWay(g, hard ? 7 : 5, hard ? 0.15 : 0.18, 230, 5, '#ffd56b')
+      b.fire2 = lv(g, 1.3, 0.9, 0.7)
+      aimedWay(g, lv(g, 3, 5, 7), lv(g, 0.22, 0.18, 0.15), 230, 5, '#ffd56b')
     }
   } else if (b.phase === 2) {
     // フェーズ3：カーブ旋風 … 右回り・左回りに曲がる弾が交差する（ハード：20発・強く曲がる）
     if (b.fire <= 0) {
-      b.fire = hard ? 0.38 : 0.45
+      b.fire = lv(g, 0.6, 0.45, 0.38)
       b.angle += 0.3
-      const n = hard ? 20 : 16
-      const curve = hard ? 1.35 : 1.1
+      const n = lv(g, 12, 16, 20)
+      const curve = lv(g, 0.9, 1.1, 1.35)
       for (let k = 0; k < n; k++) {
         const cw = k % 2 === 0
         fire(g, b.x, b.y, b.angle + (k * Math.PI * 2) / n, 135, 5, cw ? '#5cf2ff' : '#ff7ad9', {
@@ -174,15 +181,15 @@ function bossAttack(g, dt) {
       }
     }
     if (b.fire2 <= 0) {
-      b.fire2 = hard ? 1.1 : 1.6
-      aimedWay(g, hard ? 5 : 3, 0.25, 200, 6, '#ffffff')
+      b.fire2 = lv(g, 2.0, 1.6, 1.1)
+      aimedWay(g, lv(g, 1, 3, 5), 0.25, 200, 6, '#ffffff')
     }
   } else if (b.phase === 3) {
     // フェーズ4：花火 … 大玉が飛んでいき、少しすると破裂して輪になる
     // ハード：玉が4発に増え、破裂後の弾が渦を巻くように曲がる。さらに自機狙いの小弾が加わる
     if (b.fire <= 0) {
-      b.fire = hard ? 0.85 : 1.0
-      for (let k = 0; k < (hard ? 4 : 3); k++) {
+      b.fire = lv(g, 1.3, 1.0, 0.85)
+      for (let k = 0; k < lv(g, 2, 3, 4); k++) {
         const tx = 40 + Math.random() * (W - 80)
         const ty = 260 + Math.random() * 260
         const a = Math.atan2(ty - b.y, tx - b.x)
@@ -196,17 +203,18 @@ function bossAttack(g, dt) {
   } else {
     // フェーズ5：逆回転の二重スパイラル ＋ リング（ハード：リングが太く速く、自機狙い弾も追加）
     if (b.fire <= 0) {
-      b.fire = hard ? 0.045 : 0.05
+      b.fire = lv(g, 0.075, 0.05, 0.045)
       b.angle += 0.21
-      for (let k = 0; k < 3; k++) {
-        const base = (k * Math.PI * 2) / 3
+      const arms = lv(g, 2, 3, 3)
+      for (let k = 0; k < arms; k++) {
+        const base = (k * Math.PI * 2) / arms
         fire(g, b.x, b.y, b.angle + base, 135, 5, '#c58bff')
         fire(g, b.x, b.y, -b.angle + base, 135, 5, '#7dffb0')
       }
     }
     if (b.fire2 <= 0) {
-      b.fire2 = hard ? 1.0 : 1.3
-      const n = hard ? 26 : 20
+      b.fire2 = lv(g, 1.7, 1.3, 1.0)
+      const n = lv(g, 14, 20, 26)
       const offset = hard ? Math.random() * Math.PI : 0
       for (let k = 0; k < n; k++) {
         fire(g, b.x, b.y, offset + (k * Math.PI * 2) / n, 95, 8, '#ff9a5c')
@@ -327,7 +335,7 @@ function update(g, dt, keys) {
         e.dead = true
         burst(g, e.x, e.y, '#ffe066', 12)
         // ハードは破裂後の弾が多く、渦を巻くように曲がる
-        const n = g.hard ? 18 : 14
+        const n = lv(g, 10, 14, 18)
         const v = 115 * g.diff.speed
         const swirl = g.hard ? (Math.random() < 0.5 ? 0.9 : -0.9) : 0
         const offset = Math.random() * Math.PI
@@ -465,7 +473,7 @@ function draw(ctx, g, screen) {
     ctx.textAlign = 'right'
     ctx.fillText(`${'♥'.repeat(Math.max(0, g.lives))}  ${g.time.toFixed(1)}s`, W - 20, 42)
     ctx.textAlign = 'center'
-    ctx.fillStyle = g.hard ? '#ff8a8a' : '#c9c9e6'
+    ctx.fillStyle = lv(g, '#9dffc4', '#c9c9e6', '#ff8a8a')
     ctx.fillText(`${g.diff.label}  PHASE ${b.phase + 1}/${PHASES.length}`, W / 2, 42)
 
     // フェーズ名の表示（切り替わった直後だけ）
@@ -477,6 +485,13 @@ function draw(ctx, g, screen) {
       ctx.globalAlpha = 1
     }
   }
+}
+
+// タイトル画面に出す難易度の説明
+const DIFF_NOTES = {
+  easy: '弾が遅く・少なめ、残機5つ。スコア0.5倍',
+  normal: '標準の難しさ',
+  hard: '弾が速く・多く・新しい攻撃も追加！ スコア1.5倍',
 }
 
 // ===== React コンポーネント =====
@@ -548,9 +563,12 @@ export default function App() {
       if (['ArrowUp', 'ArrowDown', 'ArrowLeft', 'ArrowRight', ' '].includes(e.key)) e.preventDefault()
       if (screenRef.current !== 'playing') {
         if (e.key === 'Enter' || e.key === ' ') start()
-        // タイトル画面では ←→ / 上下 で難易度を切り替える
-        else if (screenRef.current === 'title' && e.key.startsWith('Arrow'))
-          setDiff(diffRef.current.key === 'hard' ? DIFFICULTIES.normal : DIFFICULTIES.hard)
+        // タイトル画面では ←→ で難易度を切り替える
+        else if (screenRef.current === 'title' && (e.key === 'ArrowLeft' || e.key === 'ArrowRight')) {
+          const list = Object.values(DIFFICULTIES)
+          const i = list.indexOf(diffRef.current) + (e.key === 'ArrowRight' ? 1 : -1)
+          setDiff(list[Math.max(0, Math.min(list.length - 1, i))])
+        }
         else if (e.key === 'Escape') toTitle()
         return
       }
@@ -623,9 +641,7 @@ export default function App() {
                 </button>
               ))}
             </div>
-            {diff.key === 'hard' && (
-              <p className="hard-note">弾が速く・多く・新しい攻撃も追加！ スコア1.5倍</p>
-            )}
+            <p className={`diff-note ${diff.key}`}>{DIFF_NOTES[diff.key]}</p>
             <p className="hint">←→ で選んで Enter / Space で開始</p>
           </div>
         )}
