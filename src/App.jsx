@@ -32,17 +32,20 @@ function phaseOf(boss) {
   return Math.min(PHASES.length - 1, Math.floor((1 - ratio) * PHASES.length))
 }
 
-// ベストスコアの読み書き（難易度ごとに別々に保存。使えない環境でも落ちないように try/catch）
-function loadBest(diff) {
+// ベストスコアの読み書き（ステージ・難易度ごとに別々に保存。使えない環境でも落ちないように try/catch）
+function bestKey(diff, stage) {
+  return stage === 1 ? diff.bestKey : `${diff.bestKey}-stage2`
+}
+function loadBest(diff, stage) {
   try {
-    return Number(localStorage.getItem(diff.bestKey)) || 0
+    return Number(localStorage.getItem(bestKey(diff, stage))) || 0
   } catch {
     return 0
   }
 }
-function saveBest(diff, score) {
+function saveBest(diff, stage, score) {
   try {
-    localStorage.setItem(diff.bestKey, String(score))
+    localStorage.setItem(bestKey(diff, stage), String(score))
   } catch {
     /* 保存できなくてもゲームは続ける */
   }
@@ -487,10 +490,17 @@ function drawItemCounts(ctx, g, x, y) {
 
 // タイトル画面に出す難易度の説明
 const DIFF_NOTES = {
-  easy: '弾が遅く・少なめ、残機5つ。スコア0.5倍',
+  easy: '弾が遅く・少なめ。スコア0.5倍',
   normal: '標準の難しさ',
   hard: '弾が速く・多く・新しい攻撃も追加！ スコア1.5倍',
 }
+
+const STAGES = [
+  { stage: 1, label: 'STAGE 1', sub: '弾幕シューティング' },
+  { stage: 2, label: 'STAGE 2', sub: 'ターン制バトル' },
+]
+
+const NO_ITEMS = { onigiri: 0, cake: 0 }
 
 // ===== React コンポーネント =====
 export default function App() {
@@ -500,31 +510,44 @@ export default function App() {
   const keysRef = useRef(new Set())
   const dragRef = useRef(null)
   const diffRef = useRef(DIFFICULTIES.normal)
+  const stageRef = useRef(1)
+  const resultRef = useRef(null)
   const [screen, setScreen] = useState('title')
   const [diff, setDiffState] = useState(DIFFICULTIES.normal)
-  const [result, setResult] = useState({ score: 0, time: 0, best: 0, newBest: false, stage: 1, items: {} })
+  const [stage, setStageState] = useState(1)
+  const [result, setResult] = useState(null)
 
-  // 難易度の選択（ゲームループからも読めるように ref にも入れておく）
+  // 難易度・ステージの選択（ゲームループからも読めるように ref にも入れておく）
   const setDiff = (d) => {
     diffRef.current = d
     setDiffState(d)
   }
+  const setStage = (n) => {
+    stageRef.current = n
+    setStageState(n)
+  }
 
-  const start = (d = diffRef.current) => {
+  // ゲーム開始。items はステージ2に持っていくアイテム
+  const start = (d = diffRef.current, st = stageRef.current, items = NO_ITEMS) => {
     setDiff(d)
-    gameRef.current = createGame(d)
+    setStage(st)
+    const g = createGame(d)
+    g.items = { ...items }
+    if (st === 2) startBattle(g)
+    gameRef.current = g
     keysRef.current.clear()
     screenRef.current = 'playing'
     setScreen('playing')
   }
 
-  // ステージ1クリア後、ステージ2（ターン制バトル）へ
-  const startStage2 = () => {
-    startBattle(gameRef.current)
-    keysRef.current.clear()
-    screenRef.current = 'playing'
-    setScreen('playing')
+  // 同じステージをもう一度（ステージ2は同じアイテムを持って再挑戦）
+  const retry = () => {
+    const res = resultRef.current
+    start(diffRef.current, res.stage, res.stage === 2 ? res.startItems : NO_ITEMS)
   }
+
+  // ステージ1で集めたアイテムを持ってステージ2へ
+  const continueToStage2 = () => start(diffRef.current, 2, resultRef.current.items)
 
   const toTitle = () => {
     screenRef.current = 'title'
@@ -544,17 +567,22 @@ export default function App() {
       const g = gameRef.current
       if (screenRef.current === 'playing') {
         const end = g.stage === 1 ? update(g, dt, keysRef.current) : updateBattle(g, dt, keysRef.current)
-        if (end === 'clear' && g.stage === 1) {
-          // ステージ1クリア：まだゲームは続くのでベストスコアは保存しない
-          screenRef.current = 'stage1clear'
-          setResult({ score: g.score, time: g.time, best: 0, newBest: false, stage: 1, items: { ...g.items } })
-          setScreen('stage1clear')
-        } else if (end) {
-          const best = loadBest(g.diff)
+        if (end) {
+          const best = loadBest(g.diff, g.stage)
           const newBest = g.score > best
-          if (newBest) saveBest(g.diff, g.score)
+          if (newBest) saveBest(g.diff, g.stage, g.score)
+          const res = {
+            stage: g.stage,
+            score: g.score,
+            time: g.time,
+            best: Math.max(best, g.score),
+            newBest,
+            items: { ...g.items },
+            startItems: { ...(g.startItems ?? NO_ITEMS) },
+          }
+          resultRef.current = res
           screenRef.current = end
-          setResult({ score: g.score, time: g.time, best: Math.max(best, g.score), newBest, stage: g.stage, items: {} })
+          setResult(res)
           setScreen(end)
         }
       } else {
@@ -573,17 +601,26 @@ export default function App() {
     const normalize = (key) => (key.length === 1 ? key.toLowerCase() : key)
     const onDown = (e) => {
       if (['ArrowUp', 'ArrowDown', 'ArrowLeft', 'ArrowRight', ' '].includes(e.key)) e.preventDefault()
-      if (screenRef.current !== 'playing') {
-        if (e.key === 'Enter' || e.key === ' ') {
-          if (screenRef.current === 'stage1clear') startStage2()
-          else start()
-        }
-        // タイトル画面では ←→ で難易度を切り替える
-        else if (screenRef.current === 'title' && (e.key === 'ArrowLeft' || e.key === 'ArrowRight')) {
+      const scr = screenRef.current
+      if (scr === 'title') {
+        if (e.key === 'Enter' || e.key === ' ') start()
+        // ←→ で難易度、↑↓ でステージを切り替える
+        else if (e.key === 'ArrowLeft' || e.key === 'ArrowRight') {
           const list = Object.values(DIFFICULTIES)
           const i = list.indexOf(diffRef.current) + (e.key === 'ArrowRight' ? 1 : -1)
           setDiff(list[Math.max(0, Math.min(list.length - 1, i))])
+        } else if (e.key === 'ArrowUp' || e.key === 'ArrowDown') {
+          setStage(e.key === 'ArrowUp' ? 1 : 2)
         }
+        return
+      }
+      if (scr !== 'playing') {
+        // 結果画面：ステージ1クリア後は Enter でステージ2へ、それ以外は Enter でもう一度
+        const stage1Clear = scr === 'clear' && resultRef.current.stage === 1
+        if (e.key === 'Enter' || e.key === ' ') {
+          if (stage1Clear) continueToStage2()
+          else retry()
+        } else if (e.key === 'r' || e.key === 'R') retry()
         else if (e.key === 'Escape') toTitle()
         return
       }
@@ -630,6 +667,9 @@ export default function App() {
     dragRef.current = null
   }
 
+  const stage1Clear = screen === 'clear' && result?.stage === 1
+  const stage2Lost = screen === 'over' && result?.stage === 2
+
   return (
     <main className="game">
       <div className="stage">
@@ -646,14 +686,33 @@ export default function App() {
         {screen === 'title' && (
           <div className="overlay">
             <h1>Kanadooに挑戦！</h1>
-            <p className="sub">簡易弾幕シューティング</p>
-            <ul className="help">
-              <li>移動：矢印キー / WASD（スマホはドラッグ）</li>
-              <li>低速移動：Shift ／ ショットは自動で連射</li>
-              <li>中心の白い点だけが当たり判定</li>
-              <li>STAGE 1：弾幕バトル。ボスが落とすアイテムを拾おう</li>
-              <li>STAGE 2：ターン制バトル。たたかう or アイテムで回復</li>
-            </ul>
+            <div className="stage-select">
+              {STAGES.map((s) => (
+                <button
+                  key={s.stage}
+                  className={`stage-btn${stage === s.stage ? ' selected' : ''}`}
+                  onClick={() => setStage(s.stage)}
+                >
+                  {s.label}
+                  <span className="best">{s.sub}</span>
+                </button>
+              ))}
+            </div>
+            {stage === 1 ? (
+              <ul className="help">
+                <li>移動：矢印キー / WASD（スマホはドラッグ）</li>
+                <li>低速移動：Shift ／ ショットは自動で連射</li>
+                <li>中心の白い点だけが当たり判定</li>
+                <li>ボスが落とすアイテムは、ステージ2に持っていける</li>
+              </ul>
+            ) : (
+              <ul className="help">
+                <li>たたかう：ゲージのまん中で止めて攻撃</li>
+                <li>アイテム：食べてHPを回復</li>
+                <li>相手のターン：枠の中で弾をよける</li>
+                <li>ここから始めるとアイテムなし</li>
+              </ul>
+            )}
             <div className="difficulty">
               {Object.values(DIFFICULTIES).map((d) => (
                 <button
@@ -663,48 +722,63 @@ export default function App() {
                   onMouseEnter={() => setDiff(d)}
                 >
                   {d.label}
-                  <span className="best">BEST {loadBest(d)}</span>
+                  <span className="best">BEST {loadBest(d, stage)}</span>
                 </button>
               ))}
             </div>
             <p className={`diff-note ${diff.key}`}>{DIFF_NOTES[diff.key]}</p>
-            <p className="hint">←→ で選んで Enter / Space で開始</p>
+            <p className="hint">↑↓ でステージ ／ ←→ で難易度 ／ Enter・Space で開始</p>
           </div>
         )}
 
-        {screen === 'stage1clear' && (
+        {(screen === 'over' || screen === 'clear') && result && (
           <div className="overlay">
-            <h1>STAGE 1 CLEAR!</h1>
-            <p className="score">SCORE {result.score}</p>
-            <p className="sub">{result.time.toFixed(1)} 秒</p>
-            <div className="item-summary">
-              {Object.values(ITEMS).map((item) => (
-                <span key={item.key}>
-                  {item.name} ×{result.items[item.key] ?? 0}
-                </span>
-              ))}
-            </div>
-            <p className="sub">次は Kanadoo とのターン制バトル！</p>
-            <button onClick={startStage2}>ステージ2へ</button>
-            <p className="hint">Enter / Space でも開始</p>
-          </div>
-        )}
-
-        {(screen === 'over' || screen === 'clear') && (
-          <div className="overlay">
-            <h1>{screen === 'clear' ? 'ALL CLEAR!' : 'GAME OVER'}</h1>
-            {screen === 'over' && <p className="sub">STAGE {result.stage} で力尽きた…</p>}
-            <p className={`diff-tag ${diff.key}`}>{diff.label}</p>
+            <h1>{screen === 'clear' ? `STAGE ${result.stage} CLEAR!` : 'GAME OVER'}</h1>
+            <p className={`diff-tag ${diff.key}`}>
+              STAGE {result.stage} ／ {diff.label}
+            </p>
             <p className="score">SCORE {result.score}</p>
             <p className="sub">
               {result.time.toFixed(1)} 秒 ／ BEST {result.best}
               {result.newBest && ' 🎉 新記録！'}
             </p>
-            <button onClick={() => start()}>もう一度</button>
-            <button className="secondary" onClick={toTitle}>
-              難易度を選ぶ
+
+            {stage2Lost && (
+              <div className="tip">
+                <strong>💡 ヒント</strong>
+                <p>ステージ1でアイテムを獲得しよう！</p>
+                <p className="tip-sub">
+                  ボスに弾を当てるとアイテムを落とすことがある。ステージ1をクリアすると、拾ったアイテムを持ってステージ2に挑めるよ。
+                </p>
+              </div>
+            )}
+
+            {stage1Clear && (
+              <div className="item-summary">
+                {Object.values(ITEMS).map((item) => (
+                  <span key={item.key}>
+                    {item.name} ×{result.items[item.key] ?? 0}
+                  </span>
+                ))}
+              </div>
+            )}
+            {stage1Clear && <button onClick={continueToStage2}>このアイテムでステージ2へ</button>}
+            <button className={stage1Clear ? 'secondary' : undefined} onClick={retry}>
+              もう一度
             </button>
-            <p className="hint">Enter / Space でもう一度 ／ Esc でタイトルへ</p>
+            {stage2Lost && (
+              <button className="secondary" onClick={() => start(diffRef.current, 1)}>
+                ステージ1でアイテムを集める
+              </button>
+            )}
+            <button className="secondary" onClick={toTitle}>
+              タイトルへ
+            </button>
+            <p className="hint">
+              {stage1Clear
+                ? 'Enter でステージ2へ ／ R でもう一度 ／ Esc でタイトルへ'
+                : 'Enter・R でもう一度 ／ Esc でタイトルへ'}
+            </p>
           </div>
         )}
       </div>

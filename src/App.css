@@ -30,9 +30,10 @@
   display: flex;
   flex-direction: column;
   align-items: center;
-  justify-content: center;
+  justify-content: safe center;
   gap: 8px;
   padding: 24px;
+  overflow-y: auto; /* 小さい画面で中身が入りきらないときはスクロール */
   background: rgba(8, 8, 24, 0.72);
   color: #fff;
   text-align: center;
@@ -184,4 +185,63 @@
   margin: 8px 0;
   font-weight: 700;
   color: #fff3a0;
+}
+
+/* ===== ステージ選択 ===== */
+.overlay .stage-select {
+  display: flex;
+  gap: 10px;
+  margin-top: 8px;
+}
+
+.overlay .stage-btn {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 2px;
+  min-width: 150px;
+  margin-top: 0;
+  padding: 8px 16px;
+  font-size: 16px;
+  background: rgba(255, 255, 255, 0.08);
+  color: #fff;
+  border-radius: 12px;
+}
+
+.overlay .stage-btn.selected {
+  background: #ff8fb8;
+  color: #1a0b14;
+  box-shadow: 0 0 16px rgba(255, 143, 184, 0.5);
+}
+
+.overlay .stage-btn:not(.selected):hover {
+  background: rgba(255, 255, 255, 0.16);
+}
+
+.overlay .stage-btn .best {
+  font-size: 11px;
+  font-weight: 400;
+  opacity: 0.8;
+}
+
+/* ===== ステージ2で負けたときのヒント ===== */
+.overlay .tip {
+  margin: 8px 0 0;
+  padding: 10px 16px;
+  max-width: 320px;
+  border: 1px solid #ffd56b;
+  border-radius: 10px;
+  background: rgba(255, 213, 107, 0.1);
+  color: #fff3a0;
+}
+
+.overlay .tip p {
+  margin: 4px 0 0;
+  font-weight: 700;
+}
+
+.overlay .tip .tip-sub {
+  font-size: 12px;
+  font-weight: 400;
+  color: #dcdcf5;
 }

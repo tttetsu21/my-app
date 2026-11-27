@@ -40,9 +40,13 @@ const CONFIRM_KEYS = ['Enter', ' ', 'z', 'Z']
 const CANCEL_KEYS = ['x', 'X', 'Escape', 'Backspace']
 
 // ===== バトル開始 =====
+// ステージ1から続けて挑むときも、スコアと時間はステージ2だけで数える（アイテムは持ち越す）
 export function startBattle(g) {
   const hp = g.diff.soulHp
   g.stage = 2
+  g.score = 0
+  g.time = 0
+  g.startItems = { ...g.items } // 「もう一度」のときに同じアイテムで始めるため
   g.bullets = []
   g.shots = []
   g.drops = []
