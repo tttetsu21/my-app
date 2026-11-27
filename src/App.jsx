@@ -28,7 +28,10 @@ import {
   equipEffect,
   drawEquipIcon,
   drawEquipHud,
+  SKINS,
+  skinTrail,
 } from './shared.js'
+import { TITLES, TIER_COLORS, loadTitles, loadSkin, saveSkin, skinUnlocked, checkTitles } from './titles.js'
 import { startBattle, updateBattle, drawBattle, battleKey, battlePointer } from './stage2.js'
 
 // ===== ステージ1の設定 =====
@@ -66,6 +69,8 @@ function createGame(diff = DIFFICULTIES.normal) {
     stage: 1,
     items: { onigiri: 0, cake: 0 }, // 持っているアイテムの数（ステージ2で使う）
     equips: { ...NO_EQUIPS }, // 装備中の武器・防具（ステージ2で効果がある）
+    skin: SKINS[loadSkin()], // 着せ替え
+    stats: { gotEquip: false, gotLegend: false }, // 称号のための記録
     drops: [], // 画面上に落ちているアイテム・装備
     popups: [],
     easy: diff.key === 'easy',
@@ -233,6 +238,8 @@ function pickEquip(g, d) {
   const stars = equipStars(d.key)
   const color = RARITIES[e.rarity].color
   const cur = g.equips[e.slot]
+  g.stats.gotEquip = true
+  if (e.rarity === 'legend') g.stats.gotLegend = true
   if (!cur || equipStars(cur) < stars) {
     g.equips[e.slot] = d.key
     popup(g, d.x, d.y - 16, `${'★'.repeat(stars)} ${e.name} GET!`, color)
@@ -294,6 +301,7 @@ function update(g, dt, keys) {
   p.x = Math.max(10, Math.min(W - 10, p.x + dx * speed * dt))
   p.y = Math.max(10, Math.min(H - 10, p.y + dy * speed * dt))
   p.invuln = Math.max(0, p.invuln - dt)
+  skinTrail(g, dt)
 
   // 自機ショット（自動連射）
   g.shotCd -= dt
@@ -471,7 +479,7 @@ function draw(ctx, g, screen) {
   }
 
   // 自機
-  if (screen === 'playing') drawShip(ctx, g.player)
+  if (screen === 'playing') drawShip(ctx, g.player, { skin: g.skin })
 
   // 敵弾
   for (const e of g.bullets) {
@@ -554,6 +562,25 @@ const STAGES = [
 
 const NO_ITEMS = { onigiri: 0, cake: 0 }
 
+// スキンの見本（小さなキャンバスに描く。虹色などは動かす）
+function SkinPreview({ skin, locked }) {
+  const ref = useRef(null)
+  useEffect(() => {
+    const ctx = ref.current.getContext('2d')
+    // ロック中は黒いシルエット
+    const shown = locked ? { ...skin, color: '#2a2a4a', color2: '#2a2a4a', glow: false, rainbow: false } : skin
+    let raf
+    const paint = () => {
+      ctx.clearRect(0, 0, 56, 56)
+      drawShip(ctx, { x: 28, y: 28, r: 1, invuln: 0 }, { scale: 1.3, skin: shown })
+      if (!locked && (skin.rainbow || skin.shape === 'star' || skin.shape === 'phoenix')) raf = requestAnimationFrame(paint)
+    }
+    paint()
+    return () => cancelAnimationFrame(raf)
+  }, [skin, locked])
+  return <canvas ref={ref} width={56} height={56} className="skin-preview" />
+}
+
 // ===== React コンポーネント =====
 export default function App() {
   const canvasRef = useRef(null)
@@ -568,6 +595,20 @@ export default function App() {
   const [diff, setDiffState] = useState(DIFFICULTIES.normal)
   const [stage, setStageState] = useState(1)
   const [result, setResult] = useState(null)
+  const [titles, setTitles] = useState(() => loadTitles()) // 獲得した称号
+  const [skinKey, setSkinKey] = useState(() => loadSkin()) // 選んでいるスキン
+
+  const chooseSkin = (key) => {
+    if (!skinUnlocked(key, titles)) return
+    saveSkin(key)
+    setSkinKey(key)
+    if (gameRef.current) gameRef.current.skin = SKINS[key]
+  }
+
+  const openCollection = () => {
+    screenRef.current = 'collection'
+    setScreen('collection')
+  }
 
   // 難易度・ステージの選択（ゲームループからも読めるように ref にも入れておく）
   const setDiff = (d) => {
@@ -625,7 +666,10 @@ export default function App() {
           const best = loadBest(g.diff, g.stage)
           const newBest = g.score > best
           if (newBest) saveBest(g.diff, g.stage, g.score)
+          const newTitles = checkTitles(g, end)
+          if (newTitles.length) setTitles(loadTitles())
           const res = {
+            newTitles,
             stage: g.stage,
             score: g.score,
             time: g.time,
@@ -667,7 +711,11 @@ export default function App() {
           setDiff(list[Math.max(0, Math.min(list.length - 1, i))])
         } else if (e.key === 'ArrowUp' || e.key === 'ArrowDown') {
           setStage(e.key === 'ArrowUp' ? 1 : 2)
-        }
+        } else if (e.key === 'c' || e.key === 'C') openCollection()
+        return
+      }
+      if (scr === 'collection') {
+        if (e.key === 'Escape' || e.key === 'Enter') toTitle()
         return
       }
       if (scr !== 'playing') {
@@ -791,6 +839,56 @@ export default function App() {
             </div>
             <p className={`diff-note ${diff.key}`}>{DIFF_NOTES[diff.key]}</p>
             <p className="hint">↑↓ でステージ ／ ←→ で難易度 ／ Enter・Space で開始</p>
+            <button className="secondary" onClick={openCollection}>
+              🏆 称号・着せ替え（{titles.size}/{TITLES.length}）
+            </button>
+          </div>
+        )}
+
+        {screen === 'collection' && (
+          <div className="overlay collection">
+            <h2>着せ替え</h2>
+            <div className="skin-grid">
+              {Object.values(SKINS).map((skin) => {
+                const unlocked = skinUnlocked(skin.key, titles)
+                const title = TITLES.find((t) => t.skin === skin.key)
+                return (
+                  <button
+                    key={skin.key}
+                    className={`skin-card${skinKey === skin.key ? ' selected' : ''}${unlocked ? '' : ' locked'}`}
+                    onClick={() => chooseSkin(skin.key)}
+                    title={unlocked ? skin.name : `称号「${title.name}」で解放`}
+                  >
+                    <SkinPreview skin={skin} locked={!unlocked} />
+                    <span className="skin-name" style={{ color: TIER_COLORS[skin.tier] ?? '#ffffff' }}>
+                      {unlocked ? skin.name : '？？？'}
+                    </span>
+                    <span className="skin-stars">{skin.tier ? '★'.repeat(skin.tier) : 'はじめから'}</span>
+                  </button>
+                )
+              })}
+            </div>
+            <h2>
+              称号（{titles.size}/{TITLES.length}）
+            </h2>
+            <ul className="title-list">
+              {TITLES.map((t) => {
+                const got = titles.has(t.key)
+                return (
+                  <li key={t.key} className={got ? 'got' : ''}>
+                    <span className="title-stars" style={{ color: TIER_COLORS[t.tier] }}>
+                      {'★'.repeat(t.tier)}
+                    </span>
+                    <span className="title-name">{got ? `「${t.name}」` : '？？？'}</span>
+                    <span className="title-cond">
+                      {t.cond} → {SKINS[t.skin].name}
+                    </span>
+                  </li>
+                )
+              })}
+            </ul>
+            <button onClick={toTitle}>もどる</button>
+            <p className="hint">Esc でもどる</p>
           </div>
         )}
 
@@ -805,6 +903,23 @@ export default function App() {
               {result.time.toFixed(1)} 秒 ／ BEST {result.best}
               {result.newBest && ' 🎉 新記録！'}
             </p>
+
+            {result.newTitles.length > 0 && (
+              <div className="new-titles">
+                <strong>🏆 称号獲得！</strong>
+                {result.newTitles.map((t) => (
+                  <p key={t.key}>
+                    <span style={{ color: TIER_COLORS[t.tier] }}>{'★'.repeat(t.tier)}</span>「{t.name}」
+                    <span className="unlock">
+                      → スキン「{SKINS[t.skin].name}」解放！
+                    </span>
+                  </p>
+                ))}
+                <button className="secondary" onClick={openCollection}>
+                  着せ替える
+                </button>
+              </div>
+            )}
 
             {stage2Lost && (
               <div className="tip">

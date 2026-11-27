@@ -196,21 +196,97 @@ export function drawParticles(ctx, g) {
   ctx.globalAlpha = 1
 }
 
-// 自機（scale で大きさ、color で色を変えられる）。無敵中は点滅する
-export function drawShip(ctx, p, scale = 1, color = '#7fd8ff') {
+// ===== 自機のスキン（着せ替え） =====
+// tier が高いほどレア。shape：形 / color, color2：色 / glow：光る / trail：軌跡が出る / rainbow：虹色に変化
+export const SKINS = {
+  default: { key: 'default', name: 'スタンダード', tier: 0, shape: 'arrow', color: '#7fd8ff' },
+  // ★1：色ちがい
+  mint: { key: 'mint', name: 'ミント', tier: 1, shape: 'arrow', color: '#7dffb0' },
+  sakura: { key: 'sakura', name: 'サクラ', tier: 1, shape: 'arrow', color: '#ffa8c8' },
+  lemon: { key: 'lemon', name: 'レモン', tier: 1, shape: 'arrow', color: '#fff27a' },
+  // ★2：新しい形＋ツートンカラー
+  ocean: { key: 'ocean', name: 'オーシャン', tier: 2, shape: 'delta', color: '#3d7bff', color2: '#9ef0ff' },
+  ember: { key: 'ember', name: 'エンバー', tier: 2, shape: 'delta', color: '#ff7a3d', color2: '#ffd56b' },
+  blade: { key: 'blade', name: 'ブレード', tier: 2, shape: 'wing', color: '#c9c9e6', color2: '#ff4d6d' },
+  // ★3：光る＋軌跡
+  nebula: { key: 'nebula', name: 'ネビュラ', tier: 3, shape: 'wing', color: '#b06bff', color2: '#ff8fe0', glow: true, trail: true },
+  phantom: { key: 'phantom', name: 'ファントム', tier: 3, shape: 'delta', color: '#e8e8ff', color2: '#6a6aff', glow: true, trail: true },
+  aurora: { key: 'aurora', name: 'オーロラ', tier: 3, shape: 'wing', color: '#5cffc8', color2: '#5cb8ff', glow: true, trail: true },
+  crimson: { key: 'crimson', name: 'クリムゾン', tier: 3, shape: 'delta', color: '#ff3355', color2: '#ffb3c7', glow: true, trail: true },
+  starlight: { key: 'starlight', name: 'スターライト', tier: 3, shape: 'star', color: '#ffe9a8', color2: '#ffffff', glow: true, trail: true },
+  // ★4：虹色・金色に輝く伝説のスキン
+  rainbow: { key: 'rainbow', name: 'レインボー', tier: 4, shape: 'star', color: '#ffffff', glow: true, trail: true, rainbow: true },
+  phoenix: { key: 'phoenix', name: 'フェニックス', tier: 4, shape: 'phoenix', color: '#ffd84d', color2: '#ff6b3d', glow: true, trail: true },
+}
+
+// スキンの今の色（虹色は時間で変わる）
+function skinColors(skin, t) {
+  if (skin.rainbow) return [`hsl(${(t * 140) % 360},100%,65%)`, `hsl(${(t * 140 + 140) % 360},100%,72%)`]
+  return [skin.color, skin.color2 ?? skin.color]
+}
+
+function shapePath(ctx, shape, c1, c2, t) {
+  const poly = (pts, color) => {
+    ctx.fillStyle = color
+    ctx.beginPath()
+    pts.forEach(([x, y], i) => (i ? ctx.lineTo(x, y) : ctx.moveTo(x, y)))
+    ctx.closePath()
+    ctx.fill()
+  }
+  if (shape === 'delta') {
+    poly([[0, -15], [-13, 10], [0, 4], [13, 10]], c1)
+    poly([[0, -8], [-4, 4], [4, 4]], c2)
+  } else if (shape === 'wing') {
+    poly([[-3, -2], [-17, 9], [-5, 7]], c2)
+    poly([[3, -2], [17, 9], [5, 7]], c2)
+    poly([[0, -15], [-8, 10], [0, 5], [8, 10]], c1)
+  } else if (shape === 'star') {
+    const pts = []
+    for (let i = 0; i < 10; i++) {
+      const a = -Math.PI / 2 + (i * Math.PI) / 5 + t * 1.5
+      const r = i % 2 === 0 ? 14 : 6
+      pts.push([Math.cos(a) * r, Math.sin(a) * r])
+    }
+    poly(pts, c1)
+    ctx.fillStyle = c2
+    ctx.beginPath()
+    ctx.arc(0, 0, 4, 0, Math.PI * 2)
+    ctx.fill()
+  } else if (shape === 'phoenix') {
+    // 羽ばたく大きな翼
+    const flap = Math.sin(t * 8) * 3
+    poly([[-2, -4], [-22, -6 + flap], [-16, 4 + flap], [-20, 12 + flap], [-4, 8]], c2)
+    poly([[2, -4], [22, -6 + flap], [16, 4 + flap], [20, 12 + flap], [4, 8]], c2)
+    poly([[0, -16], [-7, 6], [0, 14], [7, 6]], c1)
+  } else {
+    poly([[0, -14], [-10, 10], [0, 5], [10, 10]], c1)
+  }
+}
+
+// 自機。opts: scale（大きさ）, skin（スキン）, aura（重力・盾モードなどの目印の色）
+// 無敵中は点滅する
+export function drawShip(ctx, p, opts = {}) {
+  const { scale = 1, skin = SKINS.default, aura } = opts
   if (p.invuln > 0 && Math.floor(p.invuln * 12) % 2 === 0) return
+  const t = performance.now() / 1000
+  const [c1, c2] = skinColors(skin, t)
   ctx.save()
   ctx.translate(p.x, p.y)
   ctx.scale(scale, scale)
-  ctx.fillStyle = color
-  ctx.beginPath()
-  ctx.moveTo(0, -14)
-  ctx.lineTo(-10, 10)
-  ctx.lineTo(0, 5)
-  ctx.lineTo(10, 10)
-  ctx.closePath()
-  ctx.fill()
+  if (skin.glow) {
+    ctx.shadowColor = c1
+    ctx.shadowBlur = skin.tier >= 4 ? 18 : 10
+  }
+  shapePath(ctx, skin.shape, c1, c2, t)
   ctx.restore()
+  if (aura) {
+    // モードの目印：自機のまわりの輪
+    ctx.strokeStyle = aura
+    ctx.lineWidth = 2
+    ctx.beginPath()
+    ctx.arc(p.x, p.y, 15 * scale, 0, Math.PI * 2)
+    ctx.stroke()
+  }
   // 当たり判定（中心の白い点）
   ctx.fillStyle = '#ffffff'
   ctx.beginPath()
@@ -299,4 +375,20 @@ export function drawEquipHud(ctx, g, x, y) {
       x += 12 + ctx.measureText(label).width
     }
   }
+}
+
+// 軌跡つきスキンの、自機のうしろに流れる光の粒
+export function skinTrail(g, dt) {
+  const skin = g.skin
+  if (!skin?.trail || Math.random() > dt * (skin.tier >= 4 ? 45 : 25)) return
+  const [c1, c2] = skinColors(skin, performance.now() / 1000)
+  const p = g.player
+  g.particles.push({
+    x: p.x + (Math.random() - 0.5) * 8,
+    y: p.y + 10,
+    vx: (Math.random() - 0.5) * 30,
+    vy: 80 + Math.random() * 60,
+    life: 0.35 + Math.random() * 0.2,
+    color: Math.random() < 0.5 ? c1 : c2,
+  })
 }

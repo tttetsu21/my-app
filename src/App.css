@@ -256,3 +256,122 @@
   font-weight: 700;
   color: #6a6a8a;
 }
+
+/* ===== 称号・着せ替え画面 ===== */
+.overlay.collection {
+  background: rgba(8, 8, 24, 0.92);
+}
+
+.overlay.collection h2 {
+  margin: 4px 0 0;
+  font-size: 18px;
+  color: #ff8fb8;
+}
+
+.overlay .skin-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(72px, 1fr));
+  gap: 6px;
+  width: 100%;
+  max-width: 420px;
+}
+
+.overlay .skin-card {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 0;
+  margin: 0;
+  padding: 4px 2px 6px;
+  border-radius: 10px;
+  border: 2px solid transparent;
+  background: rgba(255, 255, 255, 0.06);
+  color: #fff;
+  font-size: 11px;
+  font-weight: 700;
+}
+
+.overlay .skin-card:hover {
+  background: rgba(255, 255, 255, 0.12);
+}
+
+.overlay .skin-card.selected {
+  border-color: #ff8fb8;
+  background: rgba(255, 143, 184, 0.15);
+}
+
+.overlay .skin-card.locked {
+  cursor: not-allowed;
+  opacity: 0.7;
+}
+
+.overlay .skin-preview {
+  width: 48px;
+  height: 48px;
+}
+
+.overlay .skin-stars {
+  font-size: 10px;
+  font-weight: 400;
+  color: #8f8fb3;
+}
+
+.overlay .title-list {
+  list-style: none;
+  width: 100%;
+  max-width: 420px;
+  margin: 0;
+  padding: 0;
+  text-align: left;
+  font-size: 12px;
+}
+
+.overlay .title-list li {
+  display: grid;
+  grid-template-columns: 44px 1fr;
+  padding: 4px 6px;
+  border-bottom: 1px solid rgba(255, 255, 255, 0.08);
+  color: #8f8fb3;
+}
+
+.overlay .title-list li.got {
+  color: #ffffff;
+}
+
+.overlay .title-list .title-name {
+  font-weight: 700;
+}
+
+.overlay .title-list .title-cond {
+  grid-column: 2;
+  font-size: 11px;
+  color: #8f8fb3;
+}
+
+/* ===== 結果画面：称号獲得 ===== */
+.overlay .new-titles {
+  margin: 6px 0 0;
+  padding: 8px 14px;
+  max-width: 340px;
+  border: 1px solid #ffd84d;
+  border-radius: 10px;
+  background: rgba(255, 216, 77, 0.1);
+  color: #fff3a0;
+}
+
+.overlay .new-titles p {
+  margin: 4px 0 0;
+  font-weight: 700;
+  color: #ffffff;
+}
+
+.overlay .new-titles .unlock {
+  display: block;
+  font-size: 12px;
+  font-weight: 400;
+  color: #fff3a0;
+}
+
+.overlay .new-titles button.secondary {
+  margin-top: 6px;
+}

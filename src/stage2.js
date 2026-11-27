@@ -19,6 +19,7 @@ import {
   drawItemIcon,
   EQUIPS,
   drawEquipHud,
+  skinTrail,
 } from './shared.js'
 
 const BOSS_NAME = 'Kanadoo'
@@ -106,6 +107,9 @@ export function startBattle(g) {
     hp,
     maxHp: hp,
     atk: weapon ? weapon.atk : 0,
+    crits: 0, // 称号のための記録：クリティカル回数
+    itemsUsed: 0, // 使ったアイテムの数
+    minHp: hp, // いちばん減ったときのHP
     boss: { hp: g.diff.boss2Hp, maxHp: g.diff.boss2Hp, t: 0, shake: 0, fade: 1 },
     box: { ...MENU_BOX },
     bullets: [],
@@ -242,6 +246,7 @@ function eatItem(g, key) {
   if (g.items[key] <= 0) return
   const item = ITEMS[key]
   g.items[key] -= 1
+  bt.itemsUsed += 1
   const before = bt.hp
   bt.hp = Math.min(bt.maxHp, bt.hp + item.heal)
   const healed = bt.hp - before
@@ -256,6 +261,7 @@ function strike(g) {
   const bt = g.battle
   const dist = Math.abs(bt.gauge - 0.5) * 2 // 0 = ど真ん中, 1 = 端
   const critical = dist < 0.06
+  if (critical) bt.crits += 1
   const max = lv(g, 22, 20, 18) + bt.atk
   const dmg = Math.max(1, Math.round(max * (critical ? 1.25 : 1 - dist * 0.85)))
   const boss = bt.boss
@@ -407,6 +413,8 @@ export function updateBattle(g, dt, keys) {
   boss.t += dt
   boss.shake = Math.max(0, boss.shake - dt)
   p.invuln = Math.max(0, p.invuln - dt)
+  bt.minHp = Math.min(bt.minHp, bt.hp)
+  if (bt.state === 'enemy' && bt.mode !== 'shield') skinTrail(g, dt)
 
   // 枠をなめらかに変形させる
   const target = bt.state !== 'enemy' ? MENU_BOX : bt.mode === 'shield' ? SHIELD_BOX : DODGE_BOX
@@ -782,7 +790,7 @@ export function drawBattle(ctx, g, screen) {
     for (const e of bt.bullets) drawArrow(ctx, e)
     if (screen === 'playing') {
       drawShield(ctx, g)
-      drawShip(ctx, g.player, 0.8, SHIELD_COLOR)
+      drawShip(ctx, g.player, { scale: 0.8, skin: g.skin, aura: SHIELD_COLOR })
     }
   } else if (bt.state === 'enemy') {
     // 弾は枠の中だけに見える
@@ -797,7 +805,7 @@ export function drawBattle(ctx, g, screen) {
       ctx.fillStyle = GRAVITY_COLOR
       ctx.fillRect(box.x + 2, box.y + box.h - 4, box.w - 4, 3)
     }
-    if (screen === 'playing') drawShip(ctx, g.player, 0.8, bt.gravity ? GRAVITY_COLOR : undefined)
+    if (screen === 'playing') drawShip(ctx, g.player, { scale: 0.8, skin: g.skin, aura: bt.gravity ? GRAVITY_COLOR : undefined })
   }
 
   // 自分のHP
