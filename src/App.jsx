@@ -660,7 +660,10 @@ export default function App() {
     const scale = W / rect.width
     const p = gameRef.current.player
     p.x = Math.max(10, Math.min(W - 10, p.x + (e.clientX - dragRef.current.x) * scale))
-    p.y = Math.max(10, Math.min(H - 10, p.y + (e.clientY - dragRef.current.y) * scale))
+    // 重力状態のときは上下はドラッグで動かせない（タップでジャンプ）
+    const g = gameRef.current
+    if (!(g.stage === 2 && g.battle?.gravity))
+      p.y = Math.max(10, Math.min(H - 10, p.y + (e.clientY - dragRef.current.y) * scale))
     dragRef.current = { x: e.clientX, y: e.clientY }
   }
   const onPointerUp = () => {

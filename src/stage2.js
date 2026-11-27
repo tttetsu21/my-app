@@ -34,7 +34,15 @@ const BUTTONS = [
 ]
 
 // 相手のターンの攻撃パターン（ターンごとに順番に使う）
+// 奇数ターンは「重力状態」になり、GRAVITY_PATTERNS から選ぶ
 const PATTERNS = ['rain', 'hands', 'aim', 'walls']
+const GRAVITY_PATTERNS = ['pillars', 'bounce']
+
+// 重力状態の物理（px/秒）
+const GRAVITY = 900
+const JUMP_V = 400 // ジャンプの初速（最高で約90px跳ぶ）
+const GRAVITY_COLOR = '#ffb347' // 重力状態のときの自機の色
+const JUMP_KEYS = ['ArrowUp', 'w', ' ']
 
 const CONFIRM_KEYS = ['Enter', ' ', 'z', 'Z']
 const CANCEL_KEYS = ['x', 'X', 'Escape', 'Backspace']
@@ -74,8 +82,14 @@ function isRage(bt) {
   return bt.boss.hp <= bt.boss.maxHp / 2
 }
 
+// このターンの相手の攻撃が重力状態か（1ターンおき）
+function isGravityTurn(bt) {
+  return bt.turn % 2 === 1
+}
+
 // 自分のターンに枠の中に出す一言
 function flavorText(bt) {
+  if (isGravityTurn(bt)) return `${BOSS_NAME} が 重力を あやつろうとしている…！\n（次の攻撃は 重力状態。ジャンプで よけろ！）`
   if (isRage(bt)) return `${BOSS_NAME} の 目が あやしく 光っている…！`
   const list = [
     `${BOSS_NAME} は 手を ぐるぐる 回している。`,
@@ -151,7 +165,9 @@ export function battlePointer(g, x, y) {
     bt.timer = 0
     return true
   }
-  return false // 相手のターン中はドラッグで自機を動かす
+  // 相手のターン中はドラッグで自機を動かす。重力状態ならタップでジャンプも
+  if (bt.state === 'enemy' && bt.gravity) bt.tapJump = true
+  return false
 }
 
 function chooseCommand(g, i) {
@@ -209,6 +225,11 @@ function startEnemyTurn(g) {
   bt.state = 'enemy'
   bt.bullets = []
   bt.cds = {}
+  bt.gravity = isGravityTurn(bt)
+  bt.vy = 0
+  bt.tapJump = false
+  bt.jumpHeld = true // 決定キーを押しっぱなしでいきなり跳ばないように
+  if (bt.gravity) popup(g, W / 2, DODGE_BOX.y - 10, '重力！ ↑でジャンプ', GRAVITY_COLOR)
   bt.ptimer = lv(g, 5, 6, 7) + 0.4 // 最初の0.4秒は枠の変形を待つ
   const p = g.player
   p.x = DODGE_BOX.x + DODGE_BOX.w / 2
@@ -233,9 +254,18 @@ function spawnPatterns(g, dt) {
   }
   const shoot = (x, y, vx, vy, r, color, extra) => bt.bullets.push({ x, y, vx: vx * sp, vy: vy * sp, r, color, ...extra })
 
-  const main = PATTERNS[bt.turn % PATTERNS.length]
-  // 体力が半分を切ると、別のパターンが少しゆっくり重なる
-  const list = rage ? [[main, 1], [main === 'aim' ? 'rain' : 'aim', 1.6]] : [[main, 1]]
+  const half = Math.floor(bt.turn / 2)
+  let list
+  if (bt.gravity) {
+    // 重力状態：床をすべる柱・はねる手。体力が半分を切ると上から雨も降る
+    const main = GRAVITY_PATTERNS[half % GRAVITY_PATTERNS.length]
+    list = rage ? [[main, 1], ['rain', lv(g, 3, 2.4, 1.8)]] : [[main, 1]]
+  } else {
+    const main = PATTERNS[half % PATTERNS.length]
+    // 体力が半分を切ると、別のパターンが少しゆっくり重なる
+    list = rage ? [[main, 1], [main === 'aim' ? 'rain' : 'aim', 1.6]] : [[main, 1]]
+  }
+  const floor = box.y + box.h
 
   for (const [name, slow] of list) {
     if (name === 'rain') {
@@ -271,6 +301,36 @@ function spawnPatterns(g, dt) {
           if (x > gx && x < gx + gap) continue
           shoot(x, box.y - 8, 0, lv(g, 100, 120, 140), 6, '#ff7ad9')
         }
+      }
+    } else if (name === 'pillars') {
+      // 弾の柱が床をすべってくる：低い柱はジャンプでとびこえる
+      // ノーマル以上では天井から伸びる柱も来る（こちらはジャンプすると当たる）
+      if (cd('pillars' + slow, lv(g, 1.15, 0.85, 0.65) * slow)) {
+        const side = Math.random() < 0.5 ? -1 : 1
+        const x = side < 0 ? box.x - 10 : box.x + box.w + 10
+        const vx = -side * lv(g, 140, 170, 200)
+        const ceiling = Math.random() < lv(g, 0, 0.3, 0.4)
+        if (ceiling) {
+          // 床から 45px だけ空けて、上から全部ふさぐ
+          for (let y = box.y + 6; y < floor - 45; y += 12) shoot(x, y, vx, 0, 6, '#5cf2ff')
+        } else {
+          const n = 2 + Math.floor(Math.random() * lv(g, 3, 4, 5)) // 高さ 2〜6 個
+          for (let i = 0; i < n; i++) shoot(x, floor - 6 - i * 12, vx, 0, 6, GRAVITY_COLOR)
+        }
+      }
+    } else if (name === 'bounce') {
+      // 手が床ではねながら横切る：下をくぐるか、とびこえる
+      if (cd('bounce' + slow, lv(g, 1.3, 0.95, 0.75) * slow)) {
+        const side = Math.random() < 0.5 ? -1 : 1
+        const x = side < 0 ? box.x - 20 : box.x + box.w + 20
+        const hop = lv(g, 300, 340, 380) * (0.85 + Math.random() * 0.3)
+        shoot(x, floor - 40 - Math.random() * 60, -side * lv(g, 110, 140, 170), 0, 12, '#fff6e0', {
+          hand: side,
+          rot: 0,
+          spin: side * 8,
+          fall: true,
+          hop,
+        })
       }
     }
   }
@@ -338,19 +398,32 @@ function updateEnemyTurn(g, dt, keys) {
   let dy = 0
   if (keys.has('ArrowLeft') || keys.has('a')) dx -= 1
   if (keys.has('ArrowRight') || keys.has('d')) dx += 1
-  if (keys.has('ArrowUp') || keys.has('w')) dy -= 1
-  if (keys.has('ArrowDown') || keys.has('s')) dy += 1
-  if (dx && dy) {
-    dx *= Math.SQRT1_2
-    dy *= Math.SQRT1_2
+  if (bt.gravity) {
+    moveWithGravity(bt, p, box, keys, dt)
+  } else {
+    if (keys.has('ArrowUp') || keys.has('w')) dy -= 1
+    if (keys.has('ArrowDown') || keys.has('s')) dy += 1
+    if (dx && dy) {
+      dx *= Math.SQRT1_2
+      dy *= Math.SQRT1_2
+    }
+    p.y = Math.max(box.y + 8, Math.min(box.y + box.h - 8, p.y + dy * speed * dt))
   }
   p.x = Math.max(box.x + 8, Math.min(box.x + box.w - 8, p.x + dx * speed * dt))
-  p.y = Math.max(box.y + 8, Math.min(box.y + box.h - 8, p.y + dy * speed * dt))
 
   bt.ptimer -= dt
   if (bt.ptimer < lv(g, 5, 6, 7)) spawnPatterns(g, dt)
 
+  const floor = box.y + box.h
   for (const e of bt.bullets) {
+    if (e.fall) {
+      // 重力で落ちて、床に当たるとはね返る
+      e.vy += GRAVITY * dt
+      if (e.y + e.r >= floor && e.vy > 0) {
+        e.y = floor - e.r
+        e.vy = -e.hop
+      }
+    }
     e.x += e.vx * dt
     e.y += e.vy * dt
     if (e.spin) e.rot += e.spin * dt
@@ -386,6 +459,34 @@ function updateEnemyTurn(g, dt, keys) {
     goMenu(bt)
   }
   return null
+}
+
+// 重力状態の自機：床に落ち、↑・W・Space（またはタップ）でジャンプ
+// キーを早めに離すと低いジャンプになる
+function moveWithGravity(bt, p, box, keys, dt) {
+  const floor = box.y + box.h - 8
+  const held = JUMP_KEYS.some((k) => keys.has(k))
+  const onGround = p.y >= floor - 0.5
+  if (onGround && ((held && !bt.jumpHeld) || bt.tapJump)) {
+    bt.vy = -JUMP_V
+    bt.shortHop = !bt.tapJump // タップのときは常に大ジャンプ
+  }
+  bt.tapJump = false
+  if (!held && bt.vy < 0 && bt.shortHop) {
+    bt.vy *= 0.45
+    bt.shortHop = false
+  }
+  bt.jumpHeld = held
+  bt.vy += GRAVITY * dt
+  p.y += bt.vy * dt
+  if (p.y >= floor) {
+    p.y = floor
+    bt.vy = 0
+  }
+  if (p.y < box.y + 8) {
+    p.y = box.y + 8
+    bt.vy = Math.max(0, bt.vy)
+  }
 }
 
 // ===== 描画 =====
@@ -480,7 +581,12 @@ export function drawBattle(ctx, g, screen) {
     ctx.clip()
     for (const e of bt.bullets) drawBullet(ctx, e)
     ctx.restore()
-    if (screen === 'playing') drawShip(ctx, g.player, 0.8)
+    if (bt.gravity) {
+      // 重力状態：床をオレンジに光らせる
+      ctx.fillStyle = GRAVITY_COLOR
+      ctx.fillRect(box.x + 2, box.y + box.h - 4, box.w - 4, 3)
+    }
+    if (screen === 'playing') drawShip(ctx, g.player, 0.8, bt.gravity ? GRAVITY_COLOR : undefined)
   }
 
   // 自分のHP
@@ -518,8 +624,11 @@ export function drawBattle(ctx, g, screen) {
     menu: '←→ で選択 ／ Enter・Z で決定（タップでもOK）',
     item: '↑↓ で選択 ／ Enter・Z で使う ／ X・Esc で戻る',
     attack: 'まん中で Enter・Z・タップ！',
-    enemy: '矢印キー / ドラッグで よけろ！（Shiftで低速）',
+    enemy: bt.gravity
+      ? '重力状態！ ←→で移動 ／ ↑・W・Space・タップで ジャンプ'
+      : '矢印キー / ドラッグで よけろ！（Shiftで低速）',
   }
+  ctx.fillStyle = bt.state === 'enemy' && bt.gravity ? GRAVITY_COLOR : '#8f8fb3'
   ctx.fillText(hints[bt.state] ?? 'Enter・Z・タップで 次へ', W / 2, 600)
 
   drawParticles(ctx, g)

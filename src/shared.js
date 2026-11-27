@@ -149,13 +149,13 @@ export function drawParticles(ctx, g) {
   ctx.globalAlpha = 1
 }
 
-// 自機（scale で大きさを変えられる）。無敵中は点滅する
-export function drawShip(ctx, p, scale = 1) {
+// 自機（scale で大きさ、color で色を変えられる）。無敵中は点滅する
+export function drawShip(ctx, p, scale = 1, color = '#7fd8ff') {
   if (p.invuln > 0 && Math.floor(p.invuln * 12) % 2 === 0) return
   ctx.save()
   ctx.translate(p.x, p.y)
   ctx.scale(scale, scale)
-  ctx.fillStyle = '#7fd8ff'
+  ctx.fillStyle = color
   ctx.beginPath()
   ctx.moveTo(0, -14)
   ctx.lineTo(-10, 10)
