@@ -111,7 +111,10 @@ export function startBattle(g) {
   g.battle = {
     state: 'message',
     text: `${BOSS_NAME} が 本気で 立ちはだかった！`,
-    next: 'menu',
+    next: 'enemy', // いきなり先制攻撃（必殺技）
+    specialPending: true,
+    specialCount: 0,
+    rageSpecialDone: false,
     timer: 2.5,
     sel: 0,
     itemSel: 0,
@@ -150,6 +153,7 @@ function mainPattern(bt) {
 
 // 相手のターンの長さ（盾モードは5秒長い）
 function turnLength(g, bt) {
+  if (bt.mode === 'special') return SPECIAL_LEN - 0.4
   return lv(g, 5, 6, 7) + (bt.mode === 'shield' ? 5 : 0)
 }
 
@@ -290,6 +294,10 @@ function strike(g) {
   const dmg = Math.max(1, Math.round(max * (critical ? 1.25 : 1 - dist * 0.85)))
   const boss = bt.boss
   boss.hp = Math.max(0, boss.hp - dmg)
+  if (boss.hp > 0 && isRage(bt) && !bt.rageSpecialDone) {
+    bt.rageSpecialDone = true
+    bt.specialPending = true
+  }
   boss.shake = 0.5
   addScore(g, dmg * 30)
   burst(g, BOSS2_POS.x, BOSS2_POS.y, critical ? '#fff3a0' : '#ff8fb8', critical ? 40 : 20)
@@ -304,9 +312,14 @@ function startEnemyTurn(g) {
   bt.state = 'enemy'
   bt.bullets = []
   bt.cds = {}
-  bt.mode = turnMode(bt)
+  bt.mode = bt.specialPending ? 'special' : turnMode(bt)
+  bt.specialPending = false
   bt.gravity = bt.mode === 'gravity'
-  bt.pattern = mainPattern(bt)
+  bt.pattern = bt.mode === 'special' ? 'special' : mainPattern(bt)
+  bt.stime = 0
+  bt.specialStep = 0
+  bt.turnStartHp = bt.hp
+  if (bt.mode === 'special') popup(g, W / 2, DODGE_BOX.y - 10, '必殺「拍手喝采」！', '#ff8fb8')
   bt.gdir = 'down'
   bt.slamming = false
   bt.jumpBuffer = 0
@@ -471,7 +484,7 @@ export function updateBattle(g, dt, keys) {
   if (bt.state === 'message') {
     bt.timer -= dt
     if (bt.timer <= 0) {
-      if (bt.next === 'enemy') startEnemyTurn(g)
+      if (bt.next === 'enemy' || bt.specialPending) startEnemyTurn(g)
       else goMenu(bt)
     }
   } else if (bt.state === 'attack') {
@@ -544,7 +557,10 @@ function updateEnemyTurn(g, dt, keys) {
   if (bt.onPlat && (!bt.plats.includes(bt.onPlat) || Math.abs(p.x - bt.onPlat.x) > bt.onPlat.w / 2 + 3)) bt.onPlat = null
 
   bt.ptimer -= dt
-  if (bt.ptimer < turnLength(g, bt)) spawnPatterns(g, dt)
+  if (bt.mode === 'special') {
+    bt.stime += dt
+    runSpecial(g)
+  } else if (bt.ptimer < turnLength(g, bt)) spawnPatterns(g, dt)
 
   // このフレームで動いたか（色つき攻撃の判定用。ドラッグでの移動もふくむ）
   const moving = Math.hypot(p.x - bt.prevX, p.y - bt.prevY) > 0.5
@@ -570,14 +586,27 @@ function updateEnemyTurn(g, dt, keys) {
       if (e.warn > 0) e.warn -= dt
       else e.life -= dt
     }
+    // 決められた時刻に速さが変わる弾（必殺技用）
+    while (e.ev?.length && bt.stime >= e.ev[0].t) {
+      const v = e.ev.shift()
+      e.vx = v.vx
+      e.vy = v.vy
+    }
     e.x += e.vx * dt
     e.y += e.vy * dt
+    if (e.orbit) {
+      // 中心のまわりを回る弾（風車）
+      const o = e.orbit
+      o.a += o.w * dt
+      e.x = o.cx + Math.cos(o.a) * o.r
+      e.y = o.cy + Math.sin(o.a) * o.r
+    }
     if (e.spin) e.rot += e.spin * dt
   }
   const m = 120
   bt.bullets = bt.bullets.filter(
     (e) =>
-      !(e.spike && e.life <= 0) && e.x > box.x - m && e.x < box.x + box.w + m && e.y > box.y - m && e.y < box.y + box.h + m,
+      !(e.spike && e.life <= 0) && !(e.dieT !== undefined && bt.stime >= e.dieT) && e.x > box.x - m && e.x < box.x + box.w + m && e.y > box.y - m && e.y < box.y + box.h + m,
   )
 
   // 被弾
@@ -604,11 +633,113 @@ function updateEnemyTurn(g, dt, keys) {
   // ターン終了：よけきったら自分のターンへ
   if (bt.ptimer <= 0) {
     bt.bullets = []
-    bt.turn += 1
-    addScore(g, 500)
-    goMenu(bt)
+    if (bt.mode === 'special') {
+      // 必殺技はターンの順番に数えない
+      bt.specialCount += 1
+      const perfect = bt.hp === bt.turnStartHp
+      goMenu(bt)
+      bt.text = perfect
+        ? `「拍手喝采」を 完全に 見切った！\nボーナス +${Math.round(3000 * g.diff.score)}`
+        : bt.specialCount === 1
+          ? `${BOSS_NAME} の 先制攻撃「拍手喝采」！\n…毎回 同じ動き。おぼえれば よけられる？`
+          : `${BOSS_NAME} が ふたたび「拍手喝采」を はなった！`
+      addScore(g, perfect ? 3000 : 500)
+    } else {
+      bt.turn += 1
+      addScore(g, 500)
+      goMenu(bt)
+    }
   }
   return null
+}
+
+// ===== 必殺技「拍手喝采」 =====
+// 毎回まったく同じ動きをする（ランダムなし）。初見ではよけにくいが、おぼえればノーダメージでいける
+//  0.1秒  床から弾の列がせり上がる          → すぐ上に逃げる
+//  0.95秒 左右から壁がはさみこむ（すき間は上のほう） → すき間の高さで待つ
+//  2.15秒 中心のまわりに風車が回る           → まん中の穴に入る
+//  4.2秒  左から青い柱、つづいて右からオレンジの柱 → 青は止まる、オレンジは動く
+const SPECIAL_LEN = 6.0
+const SPECIAL_STEPS = [
+  { t: 0.1, run: specialRise },
+  { t: 0.95, run: specialClap },
+  { t: 2.15, run: specialWindmill },
+  { t: 4.2, run: (g) => specialColor(g, 'blue') },
+  { t: 4.75, run: (g) => specialColor(g, 'orange') },
+]
+
+function runSpecial(g) {
+  const bt = g.battle
+  while (bt.specialStep < SPECIAL_STEPS.length && bt.stime >= SPECIAL_STEPS[bt.specialStep].t) {
+    SPECIAL_STEPS[bt.specialStep].run(g)
+    bt.specialStep += 1
+  }
+}
+
+function specialRise(g) {
+  const bt = g.battle
+  const box = DODGE_BOX
+  const bottom = box.y + box.h
+  const v = lv(g, 200, 260, 300)
+  const stopY = bottom - 80 // ここまでせり上がって止まる
+  for (const extra of [0, 12]) {
+    const y0 = bottom + 8 + extra
+    const tStop = 0.1 + (y0 - (stopY + extra)) / v
+    for (let x = box.x + 6; x < box.x + box.w; x += 12) {
+      bt.bullets.push({
+        x,
+        y: y0,
+        vx: 0,
+        vy: -v,
+        r: 6,
+        color: '#ff6b9d',
+        ev: [
+          { t: tStop, vx: 0, vy: 0 },
+          { t: 1.6, vx: 0, vy: 300 },
+        ],
+      })
+    }
+  }
+}
+
+function specialClap(g) {
+  const bt = g.battle
+  const box = DODGE_BOX
+  const gapTop = box.y + 22
+  const gapBot = box.y + 62
+  const v = lv(g, 170, 200, 230)
+  for (const side of [-1, 1]) {
+    const x = side < 0 ? box.x - 8 : box.x + box.w + 8
+    for (let y = box.y + 6; y < box.y + box.h; y += 12) {
+      if (y > gapTop && y < gapBot) continue
+      bt.bullets.push({ x, y, vx: -side * v, vy: 0, r: 6, color: '#fff6e0' })
+    }
+  }
+}
+
+function specialWindmill(g) {
+  const bt = g.battle
+  const box = DODGE_BOX
+  const cx = box.x + box.w / 2
+  const cy = box.y + box.h / 2
+  const w = lv(g, 1.4, 1.7, 2.0)
+  for (let k = 0; k < 4; k++) {
+    const a = Math.PI / 4 + (k * Math.PI) / 2 // ななめ4方向からスタート（真上・真下・左右は最初は安全）
+    for (let r = 36; r <= 132; r += 12) {
+      bt.bullets.push({ x: cx, y: cy, vx: 0, vy: 0, r: 6, color: '#c58bff', orbit: { cx, cy, r, a, w }, dieT: 4.1 })
+    }
+  }
+}
+
+function specialColor(g, mode) {
+  const bt = g.battle
+  const box = DODGE_BOX
+  const fromLeft = mode === 'blue'
+  const x = fromLeft ? box.x - 8 : box.x + box.w + 8
+  const v = 230 * (fromLeft ? 1 : -1)
+  for (let y = box.y + 6; y < box.y + box.h; y += 12) {
+    bt.bullets.push({ x, y, vx: v, vy: 0, r: 6, color: mode === 'blue' ? BLUE : ORANGE, cmode: mode })
+  }
 }
 
 // ===== 盾モード =====
@@ -1045,7 +1176,9 @@ export function drawBattle(ctx, g, screen) {
             : bt.pattern === 'platforms'
               ? '台から台へ ジャンプで乗り継げ！ 床に落ちると大ダメージ'
               : '重力状態！ ←→で移動 ／ ↑・W・Space・タップで ジャンプ'
-          : bt.pattern === 'colors'
+          : bt.pattern === 'special'
+            ? '必殺技！ 毎回同じ動き。パターンを おぼえて よけろ！'
+            : bt.pattern === 'colors'
             ? '青い柱は 止まって、オレンジの柱は 動いて よけろ！'
           : '矢印キー / ドラッグで よけろ！（Shiftで低速）',
   }
