@@ -16,40 +16,52 @@ const HAND_SIZE = 46
 // ===== ゲームの基本設定 =====
 const W = 480
 const H = 640
-const BOSS_HP = 900
-const BEST_KEY = 'barrage-best-score'
 const PHASES = ['スパイラル', 'リング＆狙い撃ち', 'カーブ旋風', '花火', '二重スパイラル']
+
+// ===== 難易度設定 =====
+// hp: ボスの体力 / speed: 敵弾の速さ倍率 / score: スコア倍率
+const DIFFICULTIES = {
+  normal: { key: 'normal', label: 'NORMAL', hp: 900, speed: 1, score: 1, color: '#7fd8ff', bestKey: 'barrage-best-score' },
+  hard: { key: 'hard', label: 'HARD', hp: 1200, speed: 1.15, score: 1.5, color: '#ff6b6b', bestKey: 'barrage-best-score-hard' },
+}
 
 // 残りHPから今のフェーズ番号（0〜4）を求める
 function phaseOf(boss) {
-  const ratio = Math.max(0, boss.hp) / BOSS_HP
+  const ratio = Math.max(0, boss.hp) / boss.maxHp
   return Math.min(PHASES.length - 1, Math.floor((1 - ratio) * PHASES.length))
 }
 
-// ベストスコアの読み書き（使えない環境でも落ちないように try/catch）
-function loadBest() {
+// スコア加算（難易度の倍率をかける）
+function addScore(g, points) {
+  g.score += Math.round(points * g.diff.score)
+}
+
+// ベストスコアの読み書き（難易度ごとに別々に保存。使えない環境でも落ちないように try/catch）
+function loadBest(diff) {
   try {
-    return Number(localStorage.getItem(BEST_KEY)) || 0
+    return Number(localStorage.getItem(diff.bestKey)) || 0
   } catch {
     return 0
   }
 }
-function saveBest(score) {
+function saveBest(diff, score) {
   try {
-    localStorage.setItem(BEST_KEY, String(score))
+    localStorage.setItem(diff.bestKey, String(score))
   } catch {
     /* 保存できなくてもゲームは続ける */
   }
 }
 
 // ===== ゲーム状態の作成 =====
-function createGame() {
+function createGame(diff = DIFFICULTIES.normal) {
   return {
+    diff,
+    hard: diff.key === 'hard',
     player: { x: W / 2, y: H - 80, r: 3, invuln: 2 },
     shots: [],
     bullets: [],
     particles: [],
-    boss: { x: W / 2, y: 120, r: 38, hp: BOSS_HP, t: 0, fire: 0, fire2: 0, angle: 0, flash: 0, phase: 0, handCd: 2 },
+    boss: { x: W / 2, y: 120, r: 38, hp: diff.hp, maxHp: diff.hp, t: 0, fire: 0, fire2: 0, fire3: 0, angle: 0, flash: 0, phase: 0, handCd: 2 },
     banner: 2,
     score: 0,
     lives: 3,
@@ -64,8 +76,10 @@ function createGame() {
 }
 
 // extra には curve（曲がる速さ）や fuse（爆発までの秒数）を指定できる
+// 弾の速さには難易度の倍率がかかる
 function fire(g, x, y, angle, speed, r, color, extra) {
-  g.bullets.push({ x, y, vx: Math.cos(angle) * speed, vy: Math.sin(angle) * speed, r, color, ...extra })
+  const v = speed * g.diff.speed
+  g.bullets.push({ x, y, vx: Math.cos(angle) * v, vy: Math.sin(angle) * v, r, color, ...extra })
 }
 
 function burst(g, x, y, color, count) {
@@ -98,13 +112,15 @@ function updateAmbient(g, dt) {
 // ===== ボスの弾幕パターン =====
 function bossAttack(g, dt) {
   const b = g.boss
+  const hard = g.hard
   b.fire -= dt
   b.fire2 -= dt
+  b.fire3 -= dt
   b.handCd -= dt
 
-  // 全フェーズ共通：両手をくるくる回しながら自機めがけて投げる（後半ほど頻繁）
+  // 全フェーズ共通：両手をくるくる回しながら自機めがけて投げる（後半ほど頻繁。ハードはさらに頻繁）
   if (b.handCd <= 0) {
-    b.handCd = 2.4 - b.phase * 0.3
+    b.handCd = hard ? 1.9 - b.phase * 0.25 : 2.4 - b.phase * 0.3
     for (const side of [-1, 1]) {
       const hx = b.x + side * 30
       const hy = b.y + 40
@@ -116,63 +132,71 @@ function bossAttack(g, dt) {
 
   if (b.phase === 0) {
     // フェーズ1：回転する4方向スパイラル
+    // ハード：5方向に増え、さらに自機狙い3WAYが加わる
     if (b.fire <= 0) {
-      b.fire = 0.06
+      b.fire = hard ? 0.055 : 0.06
       b.angle += 0.27
-      for (let k = 0; k < 4; k++) {
-        fire(g, b.x, b.y, b.angle + (k * Math.PI) / 2, 150, 5, '#ff6b9d')
+      const arms = hard ? 5 : 4
+      for (let k = 0; k < arms; k++) {
+        fire(g, b.x, b.y, b.angle + (k * Math.PI * 2) / arms, 150, 5, '#ff6b9d')
       }
     }
+    if (hard && b.fire2 <= 0) {
+      b.fire2 = 1.1
+      aimedWay(g, 3, 0.2, 220, 5, '#ffd56b')
+    }
   } else if (b.phase === 1) {
-    // フェーズ2：全方位リング ＋ 自機狙い5WAY
+    // フェーズ2：全方位リング ＋ 自機狙い5WAY（ハード：リング36発・7WAY・間隔短め）
     if (b.fire <= 0) {
-      b.fire = 0.7
+      b.fire = hard ? 0.55 : 0.7
+      const n = hard ? 36 : 28
       const offset = Math.random() * Math.PI
-      for (let k = 0; k < 28; k++) {
-        fire(g, b.x, b.y, offset + (k * Math.PI * 2) / 28, 120, 6, '#6bc7ff')
+      for (let k = 0; k < n; k++) {
+        fire(g, b.x, b.y, offset + (k * Math.PI * 2) / n, 120, 6, '#6bc7ff')
       }
     }
     if (b.fire2 <= 0) {
-      b.fire2 = 0.9
-      const aim = Math.atan2(g.player.y - b.y, g.player.x - b.x)
-      for (let k = -2; k <= 2; k++) {
-        fire(g, b.x, b.y, aim + k * 0.18, 230, 5, '#ffd56b')
-      }
+      b.fire2 = hard ? 0.7 : 0.9
+      aimedWay(g, hard ? 7 : 5, hard ? 0.15 : 0.18, 230, 5, '#ffd56b')
     }
   } else if (b.phase === 2) {
-    // フェーズ3（新）：カーブ旋風 … 右回り・左回りに曲がる弾が交差する
+    // フェーズ3：カーブ旋風 … 右回り・左回りに曲がる弾が交差する（ハード：20発・強く曲がる）
     if (b.fire <= 0) {
-      b.fire = 0.45
+      b.fire = hard ? 0.38 : 0.45
       b.angle += 0.3
-      for (let k = 0; k < 16; k++) {
+      const n = hard ? 20 : 16
+      const curve = hard ? 1.35 : 1.1
+      for (let k = 0; k < n; k++) {
         const cw = k % 2 === 0
-        fire(g, b.x, b.y, b.angle + (k * Math.PI * 2) / 16, 135, 5, cw ? '#5cf2ff' : '#ff7ad9', {
-          curve: cw ? 1.1 : -1.1,
+        fire(g, b.x, b.y, b.angle + (k * Math.PI * 2) / n, 135, 5, cw ? '#5cf2ff' : '#ff7ad9', {
+          curve: cw ? curve : -curve,
         })
       }
     }
     if (b.fire2 <= 0) {
-      b.fire2 = 1.6
-      const aim = Math.atan2(g.player.y - b.y, g.player.x - b.x)
-      for (let k = -1; k <= 1; k++) {
-        fire(g, b.x, b.y, aim + k * 0.25, 200, 6, '#ffffff')
-      }
+      b.fire2 = hard ? 1.1 : 1.6
+      aimedWay(g, hard ? 5 : 3, 0.25, 200, 6, '#ffffff')
     }
   } else if (b.phase === 3) {
-    // フェーズ4（新）：花火 … 大玉が飛んでいき、少しすると破裂して輪になる
+    // フェーズ4：花火 … 大玉が飛んでいき、少しすると破裂して輪になる
+    // ハード：玉が4発に増え、破裂後の弾が渦を巻くように曲がる。さらに自機狙いの小弾が加わる
     if (b.fire <= 0) {
-      b.fire = 1.0
-      for (let k = 0; k < 3; k++) {
+      b.fire = hard ? 0.85 : 1.0
+      for (let k = 0; k < (hard ? 4 : 3); k++) {
         const tx = 40 + Math.random() * (W - 80)
         const ty = 260 + Math.random() * 260
         const a = Math.atan2(ty - b.y, tx - b.x)
         fire(g, b.x, b.y, a, 170, 11, '#ffe066', { fuse: 0.8 + Math.random() * 0.5 })
       }
     }
+    if (hard && b.fire2 <= 0) {
+      b.fire2 = 0.6
+      aimedWay(g, 1, 0, 260, 4, '#ff5c5c')
+    }
   } else {
-    // フェーズ5：逆回転の二重スパイラル ＋ リング
+    // フェーズ5：逆回転の二重スパイラル ＋ リング（ハード：リングが太く速く、自機狙い弾も追加）
     if (b.fire <= 0) {
-      b.fire = 0.05
+      b.fire = hard ? 0.045 : 0.05
       b.angle += 0.21
       for (let k = 0; k < 3; k++) {
         const base = (k * Math.PI * 2) / 3
@@ -181,11 +205,26 @@ function bossAttack(g, dt) {
       }
     }
     if (b.fire2 <= 0) {
-      b.fire2 = 1.3
-      for (let k = 0; k < 20; k++) {
-        fire(g, b.x, b.y, (k * Math.PI * 2) / 20, 95, 8, '#ff9a5c')
+      b.fire2 = hard ? 1.0 : 1.3
+      const n = hard ? 26 : 20
+      const offset = hard ? Math.random() * Math.PI : 0
+      for (let k = 0; k < n; k++) {
+        fire(g, b.x, b.y, offset + (k * Math.PI * 2) / n, 95, 8, '#ff9a5c')
       }
     }
+    if (hard && b.fire3 <= 0) {
+      b.fire3 = 1.4
+      aimedWay(g, 3, 0.12, 240, 5, '#ff5c5c')
+    }
+  }
+}
+
+// 自機狙いの n-WAY 弾（spread はとなりの弾との角度差）
+function aimedWay(g, n, spread, speed, r, color) {
+  const b = g.boss
+  const aim = Math.atan2(g.player.y - b.y, g.player.x - b.x)
+  for (let k = 0; k < n; k++) {
+    fire(g, b.x, b.y, aim + (k - (n - 1) / 2) * spread, speed, r, color)
   }
 }
 
@@ -225,7 +264,7 @@ function update(g, dt, keys) {
       s.dead = true
       b.hp -= 1
       b.flash = 0.05
-      g.score += 10
+      addScore(g, 10)
     }
   }
   g.shots = g.shots.filter((s) => !s.dead && s.y > -20)
@@ -242,12 +281,13 @@ function update(g, dt, keys) {
   if (phase !== b.phase && b.hp > 0) {
     b.phase = phase
     for (const e of g.bullets) {
-      g.score += 10
+      addScore(g, 10)
       if (Math.random() < 0.3) burst(g, e.x, e.y, e.color, 2)
     }
     g.bullets = []
     b.fire = 1
     b.fire2 = 1.3
+    b.fire3 = 1.6
     b.handCd = 2
     b.angle = 0
     g.banner = 2
@@ -286,10 +326,14 @@ function update(g, dt, keys) {
         // 花火の破裂
         e.dead = true
         burst(g, e.x, e.y, '#ffe066', 12)
+        // ハードは破裂後の弾が多く、渦を巻くように曲がる
+        const n = g.hard ? 18 : 14
+        const v = 115 * g.diff.speed
+        const swirl = g.hard ? (Math.random() < 0.5 ? 0.9 : -0.9) : 0
         const offset = Math.random() * Math.PI
-        for (let k = 0; k < 14; k++) {
-          const a = offset + (k * Math.PI * 2) / 14
-          spawned.push({ x: e.x, y: e.y, vx: Math.cos(a) * 115, vy: Math.sin(a) * 115, r: 4, color: '#ff9a3c' })
+        for (let k = 0; k < n; k++) {
+          const a = offset + (k * Math.PI * 2) / n
+          spawned.push({ x: e.x, y: e.y, vx: Math.cos(a) * v, vy: Math.sin(a) * v, r: 4, color: '#ff9a3c', curve: swirl })
         }
       }
     }
@@ -316,7 +360,9 @@ function update(g, dt, keys) {
   if (b.hp <= 0) {
     burst(g, b.x, b.y, '#ffd56b', 120)
     g.bullets = []
-    g.score += g.lives * 5000 + Math.max(0, Math.floor(180 - g.time)) * 100
+    // タイムボーナスの基準時間はボスの体力に比例（ノーマル180秒・ハード240秒）
+    const par = (180 * b.maxHp) / DIFFICULTIES.normal.hp
+    addScore(g, g.lives * 5000 + Math.max(0, Math.floor(par - g.time)) * 100)
     return 'clear'
   }
   return null
@@ -410,7 +456,7 @@ function draw(ctx, g, screen) {
     ctx.fillStyle = 'rgba(255,255,255,0.15)'
     ctx.fillRect(20, 16, W - 40, 6)
     ctx.fillStyle = '#ff6b9d'
-    ctx.fillRect(20, 16, ((W - 40) * Math.max(0, b.hp)) / BOSS_HP, 6)
+    ctx.fillRect(20, 16, ((W - 40) * Math.max(0, b.hp)) / b.maxHp, 6)
 
     ctx.fillStyle = '#ffffff'
     ctx.font = '14px system-ui, sans-serif'
@@ -419,8 +465,8 @@ function draw(ctx, g, screen) {
     ctx.textAlign = 'right'
     ctx.fillText(`${'♥'.repeat(Math.max(0, g.lives))}  ${g.time.toFixed(1)}s`, W - 20, 42)
     ctx.textAlign = 'center'
-    ctx.fillStyle = '#c9c9e6'
-    ctx.fillText(`PHASE ${b.phase + 1}/${PHASES.length}`, W / 2, 42)
+    ctx.fillStyle = g.hard ? '#ff8a8a' : '#c9c9e6'
+    ctx.fillText(`${g.diff.label}  PHASE ${b.phase + 1}/${PHASES.length}`, W / 2, 42)
 
     // フェーズ名の表示（切り替わった直後だけ）
     if (screen === 'playing' && g.banner > 0) {
@@ -440,14 +486,28 @@ export default function App() {
   const screenRef = useRef('title')
   const keysRef = useRef(new Set())
   const dragRef = useRef(null)
+  const diffRef = useRef(DIFFICULTIES.normal)
   const [screen, setScreen] = useState('title')
-  const [result, setResult] = useState({ score: 0, time: 0, best: loadBest(), newBest: false })
+  const [diff, setDiffState] = useState(DIFFICULTIES.normal)
+  const [result, setResult] = useState({ score: 0, time: 0, best: 0, newBest: false })
 
-  const start = () => {
-    gameRef.current = createGame()
+  // 難易度の選択（ゲームループからも読めるように ref にも入れておく）
+  const setDiff = (d) => {
+    diffRef.current = d
+    setDiffState(d)
+  }
+
+  const start = (d = diffRef.current) => {
+    setDiff(d)
+    gameRef.current = createGame(d)
     keysRef.current.clear()
     screenRef.current = 'playing'
     setScreen('playing')
+  }
+
+  const toTitle = () => {
+    screenRef.current = 'title'
+    setScreen('title')
   }
 
   // ゲームループ
@@ -464,9 +524,9 @@ export default function App() {
       if (screenRef.current === 'playing') {
         const end = update(g, dt, keysRef.current)
         if (end) {
-          const best = loadBest()
+          const best = loadBest(g.diff)
           const newBest = g.score > best
-          if (newBest) saveBest(g.score)
+          if (newBest) saveBest(g.diff, g.score)
           screenRef.current = end
           setResult({ score: g.score, time: g.time, best: Math.max(best, g.score), newBest })
           setScreen(end)
@@ -486,8 +546,12 @@ export default function App() {
     const normalize = (key) => (key.length === 1 ? key.toLowerCase() : key)
     const onDown = (e) => {
       if (['ArrowUp', 'ArrowDown', 'ArrowLeft', 'ArrowRight', ' '].includes(e.key)) e.preventDefault()
-      if (screenRef.current !== 'playing' && (e.key === 'Enter' || e.key === ' ')) {
-        start()
+      if (screenRef.current !== 'playing') {
+        if (e.key === 'Enter' || e.key === ' ') start()
+        // タイトル画面では ←→ / 上下 で難易度を切り替える
+        else if (screenRef.current === 'title' && e.key.startsWith('Arrow'))
+          setDiff(diffRef.current.key === 'hard' ? DIFFICULTIES.normal : DIFFICULTIES.hard)
+        else if (e.key === 'Escape') toTitle()
         return
       }
       keysRef.current.add(normalize(e.key))
@@ -546,21 +610,40 @@ export default function App() {
               <li>ショットは自動で連射</li>
               <li>中心の白い点だけが当たり判定</li>
             </ul>
-            <button onClick={start}>スタート</button>
-            <p className="hint">Enter / Space でも開始</p>
+            <div className="difficulty">
+              {Object.values(DIFFICULTIES).map((d) => (
+                <button
+                  key={d.key}
+                  className={`diff-btn ${d.key}${diff.key === d.key ? ' selected' : ''}`}
+                  onClick={() => start(d)}
+                  onMouseEnter={() => setDiff(d)}
+                >
+                  {d.label}
+                  <span className="best">BEST {loadBest(d)}</span>
+                </button>
+              ))}
+            </div>
+            {diff.key === 'hard' && (
+              <p className="hard-note">弾が速く・多く・新しい攻撃も追加！ スコア1.5倍</p>
+            )}
+            <p className="hint">←→ で選んで Enter / Space で開始</p>
           </div>
         )}
 
         {(screen === 'over' || screen === 'clear') && (
           <div className="overlay">
             <h1>{screen === 'clear' ? 'STAGE CLEAR!' : 'GAME OVER'}</h1>
+            <p className={`diff-tag ${diff.key}`}>{diff.label}</p>
             <p className="score">SCORE {result.score}</p>
             <p className="sub">
               {result.time.toFixed(1)} 秒 ／ BEST {result.best}
               {result.newBest && ' 🎉 新記録！'}
             </p>
-            <button onClick={start}>もう一度</button>
-            <p className="hint">Enter / Space でも開始</p>
+            <button onClick={() => start()}>もう一度</button>
+            <button className="secondary" onClick={toTitle}>
+              難易度を選ぶ
+            </button>
+            <p className="hint">Enter / Space でもう一度 ／ Esc でタイトルへ</p>
           </div>
         )}
       </div>
