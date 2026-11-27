@@ -1,11 +1,17 @@
 import { useEffect, useRef, useState } from 'react'
 import './App.css'
 import bossUrl from './assets/boss.png'
+import handUrl from './assets/hand.png'
 
 // ボスの画像（読み込み前は丸で代わりに描く）
 const bossImg = new Image()
 bossImg.src = bossUrl
 const BOSS_SIZE = 110
+
+// ボスが投げてくる手の画像
+const handImg = new Image()
+handImg.src = handUrl
+const HAND_SIZE = 46
 
 // ===== ゲームの基本設定 =====
 const W = 480
@@ -43,7 +49,7 @@ function createGame() {
     shots: [],
     bullets: [],
     particles: [],
-    boss: { x: W / 2, y: 120, r: 38, hp: BOSS_HP, t: 0, fire: 0, fire2: 0, angle: 0, flash: 0, phase: 0 },
+    boss: { x: W / 2, y: 120, r: 38, hp: BOSS_HP, t: 0, fire: 0, fire2: 0, angle: 0, flash: 0, phase: 0, handCd: 2 },
     banner: 2,
     score: 0,
     lives: 3,
@@ -94,6 +100,18 @@ function bossAttack(g, dt) {
   const b = g.boss
   b.fire -= dt
   b.fire2 -= dt
+  b.handCd -= dt
+
+  // 全フェーズ共通：両手をくるくる回しながら自機めがけて投げる（後半ほど頻繁）
+  if (b.handCd <= 0) {
+    b.handCd = 2.4 - b.phase * 0.3
+    for (const side of [-1, 1]) {
+      const hx = b.x + side * 30
+      const hy = b.y + 40
+      const aim = Math.atan2(g.player.y - hy, g.player.x - hx) + side * 0.12
+      fire(g, hx, hy, aim, 210, 14, '#fff6e0', { hand: side, rot: 0, spin: side * 7 })
+    }
+  }
 
   if (b.phase === 0) {
     // フェーズ1：回転する4方向スパイラル
@@ -229,6 +247,7 @@ function update(g, dt, keys) {
     g.bullets = []
     b.fire = 1
     b.fire2 = 1.3
+    b.handCd = 2
     b.angle = 0
     g.banner = 2
   }
@@ -248,6 +267,7 @@ function update(g, dt, keys) {
     }
     e.x += e.vx * dt
     e.y += e.vy * dt
+    if (e.spin) e.rot += e.spin * dt
     if (e.fuse !== undefined) {
       e.fuse -= dt
       if (e.fuse <= 0) {
@@ -345,6 +365,16 @@ function draw(ctx, g, screen) {
 
   // 敵弾
   for (const e of g.bullets) {
+    if (e.hand && handImg.complete && handImg.naturalWidth > 0) {
+      // 手：回転させて描く。右手は左右反転
+      ctx.save()
+      ctx.translate(e.x, e.y)
+      ctx.rotate(e.rot)
+      ctx.scale(e.hand, 1)
+      ctx.drawImage(handImg, -HAND_SIZE / 2, -HAND_SIZE / 2, HAND_SIZE, HAND_SIZE)
+      ctx.restore()
+      continue
+    }
     ctx.fillStyle = e.color
     ctx.beginPath()
     ctx.arc(e.x, e.y, e.r, 0, Math.PI * 2)
