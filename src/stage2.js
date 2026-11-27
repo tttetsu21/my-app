@@ -26,6 +26,7 @@ const BOSS2_POS = { x: W / 2, y: 150 }
 // 枠の大きさ：メッセージ用（横長）と、よけるとき用（小さめ）
 const MENU_BOX = { x: 30, y: 290, w: 420, h: 160 }
 const DODGE_BOX = { x: 135, y: 290, w: 210, h: 170 }
+const SHIELD_BOX = { x: 190, y: 325, w: 100, h: 100 } // 盾モードは小さな枠の中心に固定
 
 // 下のコマンドボタン
 const BUTTONS = [
@@ -33,8 +34,10 @@ const BUTTONS = [
   { label: 'アイテム', x: 250, y: 520, w: 190, h: 48 },
 ]
 
-// 相手のターンの攻撃パターン（ターンごとに順番に使う）
-// 奇数ターンは「重力状態」になり、GRAVITY_PATTERNS から選ぶ
+// 相手のターンは「ふつう → 重力 → 盾」の順にくり返す
+const TURN_MODES = ['normal', 'gravity', 'shield']
+
+// 相手のターンの攻撃パターン（同じモードの中で順番に使う）
 const PATTERNS = ['rain', 'hands', 'aim', 'walls']
 const GRAVITY_PATTERNS = ['pillars', 'bounce']
 
@@ -43,6 +46,31 @@ const GRAVITY = 900
 const JUMP_V = 400 // ジャンプの初速（最高で約90px跳ぶ）
 const GRAVITY_COLOR = '#ffb347' // 重力状態のときの自機の色
 const JUMP_KEYS = ['ArrowUp', 'w', ' ']
+
+// 盾モード：矢が上下左右から飛んでくるので、盾をその方向に向けて防ぐ
+const SHIELD_COLOR = '#5cf2ff'
+const SHIELD_R = 30 // 盾の半径（ここまで来た矢を判定する）
+const ARROW_SPAWN = 280 // 矢が現れる中心からの距離
+const DIRS = {
+  up: { x: 0, y: -1, angle: -Math.PI / 2 },
+  down: { x: 0, y: 1, angle: Math.PI / 2 },
+  left: { x: -1, y: 0, angle: Math.PI },
+  right: { x: 1, y: 0, angle: 0 },
+}
+const DIR_KEYS = {
+  ArrowUp: 'up',
+  w: 'up',
+  W: 'up',
+  ArrowDown: 'down',
+  s: 'down',
+  S: 'down',
+  ArrowLeft: 'left',
+  a: 'left',
+  A: 'left',
+  ArrowRight: 'right',
+  d: 'right',
+  D: 'right',
+}
 
 const CONFIRM_KEYS = ['Enter', ' ', 'z', 'Z']
 const CANCEL_KEYS = ['x', 'X', 'Escape', 'Backspace']
@@ -82,14 +110,15 @@ function isRage(bt) {
   return bt.boss.hp <= bt.boss.maxHp / 2
 }
 
-// このターンの相手の攻撃が重力状態か（1ターンおき）
-function isGravityTurn(bt) {
-  return bt.turn % 2 === 1
+// このターンの相手の攻撃のモード
+function turnMode(bt) {
+  return TURN_MODES[bt.turn % TURN_MODES.length]
 }
 
 // 自分のターンに枠の中に出す一言
 function flavorText(bt) {
-  if (isGravityTurn(bt)) return `${BOSS_NAME} が 重力を あやつろうとしている…！\n（次の攻撃は 重力状態。ジャンプで よけろ！）`
+  if (turnMode(bt) === 'shield') return `${BOSS_NAME} が 矢を 構えている…！\n（次の攻撃は 盾モード。矢の 方向に 盾を 向けろ！）`
+  if (turnMode(bt) === 'gravity') return `${BOSS_NAME} が 重力を あやつろうとしている…！\n（次の攻撃は 重力状態。ジャンプで よけろ！）`
   if (isRage(bt)) return `${BOSS_NAME} の 目が あやしく 光っている…！`
   const list = [
     `${BOSS_NAME} は 手を ぐるぐる 回している。`,
@@ -131,6 +160,8 @@ export function battleKey(g, key) {
     if (confirm) strike(g)
   } else if (bt.state === 'message' || bt.state === 'win') {
     if (confirm) bt.timer = 0
+  } else if (bt.state === 'enemy' && bt.mode === 'shield' && DIR_KEYS[key]) {
+    bt.shieldDir = DIR_KEYS[key]
   }
 }
 
@@ -163,6 +194,14 @@ export function battlePointer(g, x, y) {
   }
   if (bt.state === 'message' || bt.state === 'win') {
     bt.timer = 0
+    return true
+  }
+  // 盾モード：タップした方向（中心から見て上下左右）に盾を向ける
+  if (bt.state === 'enemy' && bt.mode === 'shield') {
+    const dx = x - (SHIELD_BOX.x + SHIELD_BOX.w / 2)
+    const dy = y - (SHIELD_BOX.y + SHIELD_BOX.h / 2)
+    if (Math.abs(dx) > Math.abs(dy)) bt.shieldDir = dx < 0 ? 'left' : 'right'
+    else bt.shieldDir = dy < 0 ? 'up' : 'down'
     return true
   }
   // 相手のターン中はドラッグで自機を動かす。重力状態ならタップでジャンプも
@@ -225,7 +264,8 @@ function startEnemyTurn(g) {
   bt.state = 'enemy'
   bt.bullets = []
   bt.cds = {}
-  bt.gravity = isGravityTurn(bt)
+  bt.mode = turnMode(bt)
+  bt.gravity = bt.mode === 'gravity'
   bt.vy = 0
   bt.tapJump = false
   bt.jumpHeld = true // 決定キーを押しっぱなしでいきなり跳ばないように
@@ -234,6 +274,15 @@ function startEnemyTurn(g) {
   const p = g.player
   p.x = DODGE_BOX.x + DODGE_BOX.w / 2
   p.y = DODGE_BOX.y + DODGE_BOX.h * 0.7
+  if (bt.mode === 'shield') {
+    p.x = SHIELD_BOX.x + SHIELD_BOX.w / 2
+    p.y = SHIELD_BOX.y + SHIELD_BOX.h / 2
+    bt.shieldDir = 'up'
+    bt.stime = 0
+    bt.nextArrival = 1.6 // 最初の矢が盾に届く時刻（ターン開始からの秒数）
+    bt.nextArrow = newArrow(g)
+    popup(g, W / 2, SHIELD_BOX.y - 30, '盾！ 矢の方向に向けろ', SHIELD_COLOR)
+  }
 }
 
 // ===== 相手の攻撃パターン =====
@@ -254,7 +303,7 @@ function spawnPatterns(g, dt) {
   }
   const shoot = (x, y, vx, vy, r, color, extra) => bt.bullets.push({ x, y, vx: vx * sp, vy: vy * sp, r, color, ...extra })
 
-  const half = Math.floor(bt.turn / 2)
+  const half = Math.floor(bt.turn / TURN_MODES.length)
   let list
   if (bt.gravity) {
     // 重力状態：床をすべる柱・はねる手。体力が半分を切ると上から雨も降る
@@ -348,7 +397,7 @@ export function updateBattle(g, dt, keys) {
   p.invuln = Math.max(0, p.invuln - dt)
 
   // 枠をなめらかに変形させる
-  const target = bt.state === 'enemy' ? DODGE_BOX : MENU_BOX
+  const target = bt.state !== 'enemy' ? MENU_BOX : bt.mode === 'shield' ? SHIELD_BOX : DODGE_BOX
   const k = 1 - Math.exp(-12 * dt)
   for (const key of ['x', 'y', 'w', 'h']) bt.box[key] += (target[key] - bt.box[key]) * k
 
@@ -389,6 +438,7 @@ export function updateBattle(g, dt, keys) {
 
 function updateEnemyTurn(g, dt, keys) {
   const bt = g.battle
+  if (bt.mode === 'shield') return updateShieldTurn(g, dt)
   const p = g.player
   const box = DODGE_BOX
 
@@ -459,6 +509,100 @@ function updateEnemyTurn(g, dt, keys) {
     goMenu(bt)
   }
   return null
+}
+
+// ===== 盾モード =====
+// 次に飛ばす矢を決める。ハードは速い矢（黄色）がまざる
+function newArrow(g) {
+  const dirs = Object.keys(DIRS)
+  const fast = Math.random() < lv(g, 0, 0.2, 0.35)
+  return {
+    from: dirs[Math.floor(Math.random() * dirs.length)],
+    v: lv(g, 170, 210, 250) * g.diff.speed * (fast ? 1.5 : 1),
+    fast,
+  }
+}
+
+function updateShieldTurn(g, dt) {
+  const bt = g.battle
+  const p = g.player
+  const cx = p.x
+  const cy = p.y
+  const end = lv(g, 5, 6, 7) + 0.4 // ptimer と同じ長さ
+  bt.stime += dt
+  bt.ptimer -= dt
+
+  // 矢は「盾に届く時刻」から逆算して出す → 届く間隔が一定以上あくので必ず防げる
+  const gap = lv(g, 0.6, 0.45, 0.34) * (isRage(bt) ? 0.8 : 1)
+  while (bt.nextArrival < end) {
+    const a = bt.nextArrow
+    const dist = (bt.nextArrival - bt.stime) * a.v + SHIELD_R
+    if (dist > ARROW_SPAWN) break
+    const d = DIRS[a.from]
+    bt.bullets.push({ arrow: true, from: a.from, fast: a.fast, x: cx + d.x * dist, y: cy + d.y * dist, vx: -d.x * a.v, vy: -d.y * a.v })
+    bt.nextArrival += gap * (1 + Math.random() * 0.6)
+    bt.nextArrow = newArrow(g)
+  }
+
+  for (const e of bt.bullets) {
+    e.x += e.vx * dt
+    e.y += e.vy * dt
+    if (Math.hypot(e.x - cx, e.y - cy) > SHIELD_R) continue
+    e.dead = true
+    if (e.from === bt.shieldDir) {
+      // 防いだ
+      burst(g, e.x, e.y, SHIELD_COLOR, 10)
+      addScore(g, 50)
+    } else if (p.invuln === 0) {
+      const dmg = lv(g, 3, 4, 5)
+      bt.hp = Math.max(0, bt.hp - dmg)
+      p.invuln = 0.5 // 次の矢にも反応できるよう短め
+      burst(g, cx, cy, '#ffffff', 16)
+      popup(g, cx, cy - 20, `-${dmg}`, '#ff6b6b')
+      if (bt.hp <= 0) return 'over'
+    }
+  }
+  bt.bullets = bt.bullets.filter((e) => !e.dead)
+
+  if (bt.ptimer <= 0 && bt.bullets.length === 0) {
+    bt.turn += 1
+    addScore(g, 500)
+    goMenu(bt)
+  }
+  return null
+}
+
+// 矢：飛んでいく向きにとがった形
+function drawArrow(ctx, e) {
+  ctx.save()
+  ctx.translate(e.x, e.y)
+  ctx.rotate(Math.atan2(e.vy, e.vx))
+  ctx.fillStyle = e.fast ? '#ffe066' : '#ff6b6b'
+  ctx.fillRect(-22, -2, 16, 4)
+  ctx.beginPath()
+  ctx.moveTo(4, 0)
+  ctx.lineTo(-8, -8)
+  ctx.lineTo(-8, 8)
+  ctx.closePath()
+  ctx.fill()
+  ctx.restore()
+}
+
+// 盾：自機のまわりの円と、向いている方向の弧
+function drawShield(ctx, g) {
+  const bt = g.battle
+  const p = g.player
+  ctx.strokeStyle = 'rgba(92,242,255,0.25)'
+  ctx.lineWidth = 1
+  ctx.beginPath()
+  ctx.arc(p.x, p.y, SHIELD_R, 0, Math.PI * 2)
+  ctx.stroke()
+  const a = DIRS[bt.shieldDir].angle
+  ctx.strokeStyle = SHIELD_COLOR
+  ctx.lineWidth = 6
+  ctx.beginPath()
+  ctx.arc(p.x, p.y, SHIELD_R - 4, a - Math.PI / 4, a + Math.PI / 4)
+  ctx.stroke()
 }
 
 // 重力状態の自機：床に落ち、↑・W・Space（またはタップ）でジャンプ
@@ -573,6 +717,13 @@ export function drawBattle(ctx, g, screen) {
     drawItemList(ctx, g)
   } else if (bt.state === 'attack') {
     drawGauge(ctx, bt)
+  } else if (bt.state === 'enemy' && bt.mode === 'shield') {
+    // 盾モード：矢は枠の外から飛んでくるので、枠で切らずに描く
+    for (const e of bt.bullets) drawArrow(ctx, e)
+    if (screen === 'playing') {
+      drawShield(ctx, g)
+      drawShip(ctx, g.player, 0.8, SHIELD_COLOR)
+    }
   } else if (bt.state === 'enemy') {
     // 弾は枠の中だけに見える
     ctx.save()
@@ -624,11 +775,15 @@ export function drawBattle(ctx, g, screen) {
     menu: '←→ で選択 ／ Enter・Z で決定（タップでもOK）',
     item: '↑↓ で選択 ／ Enter・Z で使う ／ X・Esc で戻る',
     attack: 'まん中で Enter・Z・タップ！',
-    enemy: bt.gravity
-      ? '重力状態！ ←→で移動 ／ ↑・W・Space・タップで ジャンプ'
-      : '矢印キー / ドラッグで よけろ！（Shiftで低速）',
+    enemy:
+      bt.mode === 'shield'
+        ? '盾モード！ 矢印キー・WASD・タップで 盾の向きを変えて防げ'
+        : bt.gravity
+          ? '重力状態！ ←→で移動 ／ ↑・W・Space・タップで ジャンプ'
+          : '矢印キー / ドラッグで よけろ！（Shiftで低速）',
   }
-  ctx.fillStyle = bt.state === 'enemy' && bt.gravity ? GRAVITY_COLOR : '#8f8fb3'
+  ctx.fillStyle =
+    bt.state !== 'enemy' ? '#8f8fb3' : bt.mode === 'shield' ? SHIELD_COLOR : bt.gravity ? GRAVITY_COLOR : '#8f8fb3'
   ctx.fillText(hints[bt.state] ?? 'Enter・Z・タップで 次へ', W / 2, 600)
 
   drawParticles(ctx, g)
