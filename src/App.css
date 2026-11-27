@@ -176,3 +176,12 @@
 .overlay button.secondary:hover {
   background: rgba(255, 255, 255, 0.08);
 }
+
+/* ===== ステージ1クリア画面：拾ったアイテム ===== */
+.overlay .item-summary {
+  display: flex;
+  gap: 16px;
+  margin: 8px 0;
+  font-weight: 700;
+  color: #fff3a0;
+}

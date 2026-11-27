@@ -1,45 +1,35 @@
 import { useEffect, useRef, useState } from 'react'
 import './App.css'
-import bossUrl from './assets/boss.png'
-import handUrl from './assets/hand.png'
+import {
+  W,
+  H,
+  BOSS_SIZE,
+  HAND_SIZE,
+  bossImg,
+  handImg,
+  ready,
+  DIFFICULTIES,
+  ITEMS,
+  ITEM_MAX,
+  lv,
+  addScore,
+  burst,
+  popup,
+  updateAmbient,
+  drawStars,
+  drawParticles,
+  drawShip,
+  drawItemIcon,
+} from './shared.js'
+import { startBattle, updateBattle, drawBattle, battleKey, battlePointer } from './stage2.js'
 
-// ボスの画像（読み込み前は丸で代わりに描く）
-const bossImg = new Image()
-bossImg.src = bossUrl
-const BOSS_SIZE = 110
-
-// ボスが投げてくる手の画像
-const handImg = new Image()
-handImg.src = handUrl
-const HAND_SIZE = 46
-
-// ===== ゲームの基本設定 =====
-const W = 480
-const H = 640
+// ===== ステージ1の設定 =====
 const PHASES = ['スパイラル', 'リング＆狙い撃ち', 'カーブ旋風', '花火', '二重スパイラル']
-
-// ===== 難易度設定 =====
-// hp: ボスの体力 / lives: 残機 / speed: 敵弾の速さ倍率 / score: スコア倍率
-const DIFFICULTIES = {
-  easy: { key: 'easy', label: 'EASY', hp: 700, lives: 5, speed: 0.85, score: 0.5, color: '#7dffb0', bestKey: 'barrage-best-score-easy' },
-  normal: { key: 'normal', label: 'NORMAL', hp: 900, lives: 3, speed: 1, score: 1, color: '#7fd8ff', bestKey: 'barrage-best-score' },
-  hard: { key: 'hard', label: 'HARD', hp: 1200, lives: 3, speed: 1.15, score: 1.5, color: '#ff6b6b', bestKey: 'barrage-best-score-hard' },
-}
-
-// 難易度に応じて値を選ぶ：lv(g, イージーの値, ノーマルの値, ハードの値)
-function lv(g, easy, normal, hard) {
-  return g.easy ? easy : g.hard ? hard : normal
-}
 
 // 残りHPから今のフェーズ番号（0〜4）を求める
 function phaseOf(boss) {
   const ratio = Math.max(0, boss.hp) / boss.maxHp
   return Math.min(PHASES.length - 1, Math.floor((1 - ratio) * PHASES.length))
-}
-
-// スコア加算（難易度の倍率をかける）
-function addScore(g, points) {
-  g.score += Math.round(points * g.diff.score)
 }
 
 // ベストスコアの読み書き（難易度ごとに別々に保存。使えない環境でも落ちないように try/catch）
@@ -62,6 +52,10 @@ function saveBest(diff, score) {
 function createGame(diff = DIFFICULTIES.normal) {
   return {
     diff,
+    stage: 1,
+    items: { onigiri: 0, cake: 0 }, // 持っているアイテムの数（ステージ2で使う）
+    drops: [], // 画面上に落ちているアイテム
+    popups: [],
     easy: diff.key === 'easy',
     hard: diff.key === 'hard',
     player: { x: W / 2, y: H - 80, r: 3, invuln: 2 },
@@ -87,33 +81,6 @@ function createGame(diff = DIFFICULTIES.normal) {
 function fire(g, x, y, angle, speed, r, color, extra) {
   const v = speed * g.diff.speed
   g.bullets.push({ x, y, vx: Math.cos(angle) * v, vy: Math.sin(angle) * v, r, color, ...extra })
-}
-
-function burst(g, x, y, color, count) {
-  for (let i = 0; i < count; i++) {
-    const a = Math.random() * Math.PI * 2
-    const s = 60 + Math.random() * 240
-    g.particles.push({ x, y, vx: Math.cos(a) * s, vy: Math.sin(a) * s, life: 0.6 + Math.random() * 0.5, color })
-  }
-}
-
-// ===== 背景・パーティクル（タイトル画面でも動かす） =====
-function updateAmbient(g, dt) {
-  for (const s of g.stars) {
-    s.y += s.s * dt
-    if (s.y > H) {
-      s.y = 0
-      s.x = Math.random() * W
-    }
-  }
-  for (const p of g.particles) {
-    p.x += p.vx * dt
-    p.y += p.vy * dt
-    p.vx *= 0.96
-    p.vy *= 0.96
-    p.life -= dt
-  }
-  g.particles = g.particles.filter((p) => p.life > 0)
 }
 
 // ===== ボスの弾幕パターン =====
@@ -236,6 +203,37 @@ function aimedWay(g, n, spread, speed, r, color) {
   }
 }
 
+// ===== アイテムのドロップ =====
+function dropItem(g, x, y) {
+  const key = Math.random() < ITEMS.cake.chance ? 'cake' : 'onigiri'
+  // 少し跳ね上がってから、ゆらゆら落ちてくる
+  g.drops.push({ key, x, y, vy: -120, t: 0 })
+}
+
+function updateDrops(g, dt) {
+  const p = g.player
+  for (const d of g.drops) {
+    d.t += dt
+    d.vy = Math.min(90, d.vy + 220 * dt)
+    d.y += d.vy * dt
+    d.x = Math.max(16, Math.min(W - 16, d.x + Math.sin(d.t * 3) * 40 * dt))
+    // 自機に触れたら拾う（弾の当たり判定より広め）
+    if (Math.hypot(d.x - p.x, d.y - p.y) < 24) {
+      d.dead = true
+      const item = ITEMS[d.key]
+      if (g.items[d.key] < ITEM_MAX) {
+        g.items[d.key] += 1
+        popup(g, d.x, d.y - 16, `${item.name} GET!`, '#fff3a0')
+      } else {
+        addScore(g, 1000)
+        popup(g, d.x, d.y - 16, '+1000', '#fff3a0')
+      }
+      burst(g, d.x, d.y, '#fff3a0', 12)
+    }
+  }
+  g.drops = g.drops.filter((d) => !d.dead && d.y < H + 20)
+}
+
 // ===== 1フレーム分の更新。終了時は 'over' か 'clear' を返す =====
 function update(g, dt, keys) {
   g.time += dt
@@ -273,9 +271,13 @@ function update(g, dt, keys) {
       b.hp -= 1
       b.flash = 0.05
       addScore(g, 10)
+      // 一定の確率でアイテムを落とす（画面上には同時に2個まで）
+      if (g.drops.length < 2 && Math.random() < g.diff.dropRate) dropItem(g, b.x, b.y + 30)
     }
   }
   g.shots = g.shots.filter((s) => !s.dead && s.y > -20)
+
+  updateDrops(g, dt)
 
   // ボスの移動と攻撃
   b.t += dt
@@ -378,18 +380,11 @@ function update(g, dt, keys) {
 
 // ===== 描画 =====
 function draw(ctx, g, screen) {
-  ctx.fillStyle = '#0b0b1a'
-  ctx.fillRect(0, 0, W, H)
-
-  // 星
-  for (const s of g.stars) {
-    ctx.fillStyle = `rgba(255,255,255,${s.s / 140})`
-    ctx.fillRect(s.x, s.y, 2, 2)
-  }
+  drawStars(ctx, g)
 
   // ボス
   const b = g.boss
-  if (b.hp > 0 && bossImg.complete && bossImg.naturalWidth > 0) {
+  if (b.hp > 0 && ready(bossImg)) {
     // ゆらゆら揺れながら描く。被弾中は明るく光らせる
     ctx.save()
     ctx.translate(b.x, b.y)
@@ -411,27 +406,22 @@ function draw(ctx, g, screen) {
   ctx.fillStyle = '#9ef0ff'
   for (const s of g.shots) ctx.fillRect(s.x - 1.5, s.y - 8, 3, 12)
 
-  // 自機
-  const p = g.player
-  if (screen === 'playing' && !(p.invuln > 0 && Math.floor(p.invuln * 12) % 2 === 0)) {
-    ctx.fillStyle = '#7fd8ff'
+  // 落ちているアイテム（光る輪で目立たせる）
+  for (const d of g.drops) {
+    ctx.strokeStyle = `rgba(255,243,160,${0.5 + Math.sin(d.t * 8) * 0.3})`
+    ctx.lineWidth = 2
     ctx.beginPath()
-    ctx.moveTo(p.x, p.y - 14)
-    ctx.lineTo(p.x - 10, p.y + 10)
-    ctx.lineTo(p.x, p.y + 5)
-    ctx.lineTo(p.x + 10, p.y + 10)
-    ctx.closePath()
-    ctx.fill()
-    // 当たり判定（中心の白い点）
-    ctx.fillStyle = '#ffffff'
-    ctx.beginPath()
-    ctx.arc(p.x, p.y, p.r + 1, 0, Math.PI * 2)
-    ctx.fill()
+    ctx.arc(d.x, d.y, 15, 0, Math.PI * 2)
+    ctx.stroke()
+    drawItemIcon(ctx, d.key, d.x, d.y, 18)
   }
+
+  // 自機
+  if (screen === 'playing') drawShip(ctx, g.player)
 
   // 敵弾
   for (const e of g.bullets) {
-    if (e.hand && handImg.complete && handImg.naturalWidth > 0) {
+    if (e.hand && ready(handImg)) {
       // 手：回転させて描く。右手は左右反転
       ctx.save()
       ctx.translate(e.x, e.y)
@@ -451,13 +441,8 @@ function draw(ctx, g, screen) {
     ctx.fill()
   }
 
-  // パーティクル
-  for (const pt of g.particles) {
-    ctx.globalAlpha = Math.min(1, pt.life * 2)
-    ctx.fillStyle = pt.color
-    ctx.fillRect(pt.x - 1.5, pt.y - 1.5, 3, 3)
-  }
-  ctx.globalAlpha = 1
+  // パーティクル・浮かぶ文字
+  drawParticles(ctx, g)
 
   // HUD
   if (screen !== 'title') {
@@ -475,6 +460,7 @@ function draw(ctx, g, screen) {
     ctx.textAlign = 'center'
     ctx.fillStyle = lv(g, '#9dffc4', '#c9c9e6', '#ff8a8a')
     ctx.fillText(`${g.diff.label}  PHASE ${b.phase + 1}/${PHASES.length}`, W / 2, 42)
+    drawItemCounts(ctx, g, 20, H - 20)
 
     // フェーズ名の表示（切り替わった直後だけ）
     if (screen === 'playing' && g.banner > 0) {
@@ -484,6 +470,18 @@ function draw(ctx, g, screen) {
       ctx.fillText(PHASES[b.phase], W / 2, H / 2)
       ctx.globalAlpha = 1
     }
+  }
+}
+
+// 左下に持っているアイテムの数を表示
+function drawItemCounts(ctx, g, x, y) {
+  ctx.font = '14px system-ui, sans-serif'
+  ctx.textAlign = 'left'
+  for (const key of Object.keys(ITEMS)) {
+    drawItemIcon(ctx, key, x + 8, y - 5, 14)
+    ctx.fillStyle = '#ffffff'
+    ctx.fillText(`×${g.items[key]}`, x + 18, y)
+    x += 56
   }
 }
 
@@ -504,7 +502,7 @@ export default function App() {
   const diffRef = useRef(DIFFICULTIES.normal)
   const [screen, setScreen] = useState('title')
   const [diff, setDiffState] = useState(DIFFICULTIES.normal)
-  const [result, setResult] = useState({ score: 0, time: 0, best: 0, newBest: false })
+  const [result, setResult] = useState({ score: 0, time: 0, best: 0, newBest: false, stage: 1, items: {} })
 
   // 難易度の選択（ゲームループからも読めるように ref にも入れておく）
   const setDiff = (d) => {
@@ -515,6 +513,14 @@ export default function App() {
   const start = (d = diffRef.current) => {
     setDiff(d)
     gameRef.current = createGame(d)
+    keysRef.current.clear()
+    screenRef.current = 'playing'
+    setScreen('playing')
+  }
+
+  // ステージ1クリア後、ステージ2（ターン制バトル）へ
+  const startStage2 = () => {
+    startBattle(gameRef.current)
     keysRef.current.clear()
     screenRef.current = 'playing'
     setScreen('playing')
@@ -537,19 +543,25 @@ export default function App() {
       last = now
       const g = gameRef.current
       if (screenRef.current === 'playing') {
-        const end = update(g, dt, keysRef.current)
-        if (end) {
+        const end = g.stage === 1 ? update(g, dt, keysRef.current) : updateBattle(g, dt, keysRef.current)
+        if (end === 'clear' && g.stage === 1) {
+          // ステージ1クリア：まだゲームは続くのでベストスコアは保存しない
+          screenRef.current = 'stage1clear'
+          setResult({ score: g.score, time: g.time, best: 0, newBest: false, stage: 1, items: { ...g.items } })
+          setScreen('stage1clear')
+        } else if (end) {
           const best = loadBest(g.diff)
           const newBest = g.score > best
           if (newBest) saveBest(g.diff, g.score)
           screenRef.current = end
-          setResult({ score: g.score, time: g.time, best: Math.max(best, g.score), newBest })
+          setResult({ score: g.score, time: g.time, best: Math.max(best, g.score), newBest, stage: g.stage, items: {} })
           setScreen(end)
         }
       } else {
         updateAmbient(g, dt)
       }
-      draw(ctx, g, screenRef.current)
+      if (g.stage === 2) drawBattle(ctx, g, screenRef.current)
+      else draw(ctx, g, screenRef.current)
       raf = requestAnimationFrame(loop)
     }
     raf = requestAnimationFrame(loop)
@@ -562,7 +574,10 @@ export default function App() {
     const onDown = (e) => {
       if (['ArrowUp', 'ArrowDown', 'ArrowLeft', 'ArrowRight', ' '].includes(e.key)) e.preventDefault()
       if (screenRef.current !== 'playing') {
-        if (e.key === 'Enter' || e.key === ' ') start()
+        if (e.key === 'Enter' || e.key === ' ') {
+          if (screenRef.current === 'stage1clear') startStage2()
+          else start()
+        }
         // タイトル画面では ←→ で難易度を切り替える
         else if (screenRef.current === 'title' && (e.key === 'ArrowLeft' || e.key === 'ArrowRight')) {
           const list = Object.values(DIFFICULTIES)
@@ -572,6 +587,8 @@ export default function App() {
         else if (e.key === 'Escape') toTitle()
         return
       }
+      // ステージ2はコマンド選択などのため、押した瞬間も伝える
+      if (gameRef.current.stage === 2 && !e.repeat) battleKey(gameRef.current, e.key)
       keysRef.current.add(normalize(e.key))
     }
     const onUp = (e) => keysRef.current.delete(normalize(e.key))
@@ -589,6 +606,14 @@ export default function App() {
   // タッチ・マウスのドラッグ操作（指を動かした分だけ自機が動く）
   const onPointerDown = (e) => {
     if (screenRef.current !== 'playing') return
+    const g = gameRef.current
+    if (g.stage === 2) {
+      // コマンド選択などのタップ。相手のターン中だけはドラッグで移動する
+      const rect = e.currentTarget.getBoundingClientRect()
+      const x = ((e.clientX - rect.left) * W) / rect.width
+      const y = ((e.clientY - rect.top) * H) / rect.height
+      if (battlePointer(g, x, y)) return
+    }
     e.currentTarget.setPointerCapture(e.pointerId)
     dragRef.current = { x: e.clientX, y: e.clientY }
   }
@@ -624,9 +649,10 @@ export default function App() {
             <p className="sub">簡易弾幕シューティング</p>
             <ul className="help">
               <li>移動：矢印キー / WASD（スマホはドラッグ）</li>
-              <li>低速移動：Shift</li>
-              <li>ショットは自動で連射</li>
+              <li>低速移動：Shift ／ ショットは自動で連射</li>
               <li>中心の白い点だけが当たり判定</li>
+              <li>STAGE 1：弾幕バトル。ボスが落とすアイテムを拾おう</li>
+              <li>STAGE 2：ターン制バトル。たたかう or アイテムで回復</li>
             </ul>
             <div className="difficulty">
               {Object.values(DIFFICULTIES).map((d) => (
@@ -646,9 +672,28 @@ export default function App() {
           </div>
         )}
 
+        {screen === 'stage1clear' && (
+          <div className="overlay">
+            <h1>STAGE 1 CLEAR!</h1>
+            <p className="score">SCORE {result.score}</p>
+            <p className="sub">{result.time.toFixed(1)} 秒</p>
+            <div className="item-summary">
+              {Object.values(ITEMS).map((item) => (
+                <span key={item.key}>
+                  {item.name} ×{result.items[item.key] ?? 0}
+                </span>
+              ))}
+            </div>
+            <p className="sub">次は Kanadoo とのターン制バトル！</p>
+            <button onClick={startStage2}>ステージ2へ</button>
+            <p className="hint">Enter / Space でも開始</p>
+          </div>
+        )}
+
         {(screen === 'over' || screen === 'clear') && (
           <div className="overlay">
-            <h1>{screen === 'clear' ? 'STAGE CLEAR!' : 'GAME OVER'}</h1>
+            <h1>{screen === 'clear' ? 'ALL CLEAR!' : 'GAME OVER'}</h1>
+            {screen === 'over' && <p className="sub">STAGE {result.stage} で力尽きた…</p>}
             <p className={`diff-tag ${diff.key}`}>{diff.label}</p>
             <p className="score">SCORE {result.score}</p>
             <p className="sub">
